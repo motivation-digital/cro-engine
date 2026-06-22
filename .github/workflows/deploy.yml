@@ -71,8 +71,8 @@ jobs:
         run: |
           # Health check on deployed worker (with retries for propagation lag)
           WORKER_URL="https://cro-engine.workers.dev/health"
-          for attempt in {1..3}; do
-            HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/health.json "$WORKER_URL" 2>/dev/null)
+          for attempt in 1 2 3; do
+            HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/health.json "$WORKER_URL" 2>/dev/null || echo "000")
             echo "Attempt $attempt: HTTP $HTTP_CODE"
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check result:"
