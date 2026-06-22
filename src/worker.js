@@ -44,6 +44,22 @@ async function forwardToGA4(event, env) {
   }
 }
 
+// ─── Consent check ─────────────────────────────────────────────────────────
+// TODO: Wire TrustCentre signal when available (AGI-9000260).
+// Zaraz fallback: check zaraz-consent cookie if no TrustCentre binding.
+
+async function checkConsent(req, tenant_id, env) {
+  // Placeholder: always allow for now.
+  // Phase 1: Check TrustCentre module if env.TRUST_CENTER binding available
+  // Phase 2: Fallback to Zaraz consent cookie parsing
+  // Phase 3: Block if no consent OR consent.analytics === false
+
+  const cookieHeader = req.headers.get('Cookie') || '';
+  // Zaraz pattern: zaraz-consent={...} — would parse analytics flag if implemented
+  // For now: return true (all events fire, pre-consent gate)
+  return true;
+}
+
 // ─── Front-end event handler ────────────────────────────────────────────────
 // POST /events — receives thin first-party signals from the frontend
 
@@ -68,8 +84,14 @@ async function handleFrontendEvent(req, env) {
     });
   }
 
-  // Check consent before firing (will be wired to TrustCentre/Zaraz)
-  // TODO: add consent gate when TrustCentre integration ready
+  // Check consent before firing (AGI-9000074 / AGI-9000260 / AGI-9000131)
+  const hasConsent = await checkConsent(req, tenant_id, env);
+  if (!hasConsent) {
+    return new Response(JSON.stringify({ success: false, reason: 'no_consent' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   // Build GA4 event
   const gaEvent = {
