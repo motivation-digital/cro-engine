@@ -38,7 +38,7 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" \
             -F "worker.js=@dist/worker.js;type=application/javascript+module" \
-            -F 'metadata={"main_module":"worker.js","compatibility_date":"2025-04-01","keep_bindings":["secret_text","d1","service","kv_namespace","r2_bucket","secrets_store_secret","secret_key","ai"],"bindings":[{"type":"plain_text","name":"GA4_MEASUREMENT_ID","text":"G-KQH8EKYZ9L"},{"type":"secrets_store_secret","name":"GA4_API_SECRET","secret_name":"cro-engine-dbc","store_id":"170e0688af5f479292e0ab52c980eff7"}]};type=application/json')
+            -F 'metadata={"main_module":"worker.js","compatibility_date":"2025-04-01","keep_bindings":["secret_text","d1","service","kv_namespace","r2_bucket","secrets_store_secret","secret_key","ai"],"bindings":[{"type":"plain_text","name":"GA4_MEASUREMENT_ID","text":"G-KQH8EKYZ9L"},{"type":"secrets_store_secret","name":"GA4_API_SECRET","secret_name":"cro-engine-dbc","store_id":"170e0688af5f479292e0ab52c980eff7"},{"type":"d1","name":"DB_SITES","database_id":"80499765-3704-4c5d-ad25-ab88592fb075"}]};type=application/json')
           echo "HTTP $HTTP_CODE"
           echo "Response body:"
           cat /tmp/cf-resp.json
