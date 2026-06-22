@@ -38,9 +38,8 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" \
             -F "worker.js=@dist/worker.js;type=application/javascript+module" \
-            -F 'metadata={"main_module":"worker.js","compatibility_date":"2025-04-01","keep_bindings":["secret_text","d1","service","kv_namespace","r2_bucket","secrets_store_secret","secret_key","ai"],"bindings":[{"type":"plain_text","name":"GA4_MEASUREMENT_ID","text":"G-KQH8EKYZ9L"},{"type":"secrets_store_secret","name":"GA4_API_SECRET","secret_name":"cro-engine-dbc","store_id":"170e0688af5f479292e0ab52c980eff7"},{"type":"d1","name":"DB_SITES","database_id":"80499765-3704-4c5d-ad25-ab88592fb075"}]};type=application/json')
+            -F 'metadata={"main_module":"worker.js","compatibility_date":"2025-04-01","bindings":[{"type":"plain_text","name":"GA4_MEASUREMENT_ID","text":"G-KQH8EKYZ9L"},{"type":"d1","name":"DB_SITES","id":"80499765-3704-4c5d-ad25-ab88592fb075"},{"type":"secrets_store_secret","name":"GA4_API_SECRET","store_id":"170e0688af5f479292e0ab52c980eff7","secret_name":"cro-engine-dbc"}]};type=application/json')
           echo "HTTP $HTTP_CODE"
-          echo "Response body:"
           cat /tmp/cf-resp.json
           echo ""
           if [ "$HTTP_CODE" != "200" ]; then
@@ -48,7 +47,18 @@ jobs:
             exit 1
           fi
 
-      - name: Verify critical bindings preserved
+      - name: Enable workers.dev subdomain
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/subdomain" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"enabled":true}'
+          echo ""
+
+      - name: Verify critical bindings
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
@@ -56,7 +66,6 @@ jobs:
             -H "Authorization: Bearer ${CF_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/settings")
           echo "HTTP $HTTP_CODE"
-          echo "Settings body:"
           cat /tmp/cf-settings.json
           echo ""
           if [ "$HTTP_CODE" != "200" ]; then
@@ -64,13 +73,13 @@ jobs:
             exit 1
           fi
           grep -q '"DB_SITES"' /tmp/cf-settings.json || { echo "::error::D1 DB_SITES binding missing"; exit 1; }
-          # GA4_API_SECRET will be present once provisioned in the Secrets Store
+          grep -q '"GA4_API_SECRET"' /tmp/cf-settings.json || { echo "::error::GA4_API_SECRET binding missing"; exit 1; }
           echo "PASS: critical bindings check complete"
 
       - name: Smoke test
         run: |
-          # Quick health check on deployed worker
-          WORKER_URL="https://cro-engine.workers.dev/health"
+          sleep 5
+          WORKER_URL="https://cro-engine.launchpad.workers.dev/health"
           HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/health.json "$WORKER_URL")
           echo "Health check HTTP $HTTP_CODE"
           cat /tmp/health.json
