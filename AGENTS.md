@@ -8,6 +8,7 @@ Repo: https://github.com/motivation-digital/lifecycle
 ## ⛔ Must not change
 
 - GA4_MEASUREMENT_ID binding (plain_text, G-KQH8EKYZ9L — locked to DBC property, used by dbc-site + dbc-index + dbc-portal + stripe-payments)
+- GA4_API_SECRET binding (Secrets Store key cro-engine-dbc — provisioned in Rule 28 pattern)
 - DB_SITES binding (multi-tenant tenant resolution)
 - /events + /purchase routes (consumed by dbc-site, dbc-index, dbc-portal, stripe-payments)
 
@@ -15,7 +16,7 @@ Repo: https://github.com/motivation-digital/lifecycle
 
 Live on workers.dev. /health endpoint returns binding status.
 
-GA4 secret (GA4_DBC_API_SECRET) must be in Cloudflare Secrets Store before first deploy (Rule 28).
+GA4 secret (cro-engine-dbc in Cloudflare Secrets Store) provisioned. Binding wired via deploy.yml metadata (Rule 28).
 
 Front-end events: thin first-party signal flow from pages → cro-engine /events → GA4.
 
