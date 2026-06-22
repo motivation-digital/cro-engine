@@ -1,0 +1,15 @@
+{
+  "name": "cro-engine",
+  "version": "0.1.0",
+  "description": "CRO measurement pipeline collector - GA4 server-side events for all brands",
+  "main": "src/worker.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "echo \"no tests yet\""
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

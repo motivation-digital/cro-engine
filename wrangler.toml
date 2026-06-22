@@ -1,0 +1,15 @@
+name = "cro-engine"
+main = "src/worker.js"
+compatibility_date = "2025-04-01"
+
+[env.production]
+vars = { GA4_MEASUREMENT_ID = "G-KQH8EKYZ9L" }
+
+[[d1_databases]]
+binding = "DB_SITES"
+database_id = "80499765-3704-4c5d-ad25-ab88592fb075"
+
+[[secrets_store_secrets]]
+binding = "GA4_API_SECRET"
+secret_name = "GA4_DBC_API_SECRET"
+store_id = "170e0688af5f479292e0ab52c980eff7"

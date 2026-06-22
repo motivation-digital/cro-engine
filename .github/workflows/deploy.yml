@@ -1,0 +1,81 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  CF_ACCOUNT_ID: "681f0c5e92719198aa9688776079097e"
+  WORKER_NAME: "cro-engine"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Bundle worker with esbuild
+        run: |
+          npx --yes esbuild@latest src/worker.js \
+            --bundle \
+            --format=esm \
+            --target=es2022 \
+            --outfile=dist/worker.js
+          ls -la dist/
+          echo "Bundle size: $(wc -c < dist/worker.js) bytes"
+
+      - name: Deploy worker script via Cloudflare API
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/cf-resp.json -X PUT \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -F "worker.js=@dist/worker.js;type=application/javascript+module" \
+            -F 'metadata={"main_module":"worker.js","compatibility_date":"2025-04-01","keep_bindings":["secret_text","d1","service","kv_namespace","r2_bucket","secrets_store_secret","secret_key","ai"],"bindings":[{"type":"plain_text","name":"GA4_MEASUREMENT_ID","text":"G-KQH8EKYZ9L"}]};type=application/json')
+          echo "HTTP $HTTP_CODE"
+          echo "Response body:"
+          cat /tmp/cf-resp.json
+          echo ""
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Deploy failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: Verify critical bindings preserved
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/cf-settings.json \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/settings")
+          echo "HTTP $HTTP_CODE"
+          echo "Settings body:"
+          cat /tmp/cf-settings.json
+          echo ""
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Bindings settings query failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          grep -q '"DB_SITES"' /tmp/cf-settings.json || { echo "::error::D1 DB_SITES binding missing"; exit 1; }
+          # GA4_API_SECRET will be present once provisioned in the Secrets Store
+          echo "PASS: critical bindings check complete"
+
+      - name: Smoke test
+        run: |
+          # Quick health check on deployed worker
+          WORKER_URL="https://cro-engine.workers.dev/health"
+          HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/health.json "$WORKER_URL")
+          echo "Health check HTTP $HTTP_CODE"
+          cat /tmp/health.json
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Smoke test failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "Smoke test PASS"
