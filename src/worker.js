@@ -1,12 +1,12 @@
-// ─── cro-engine — CRO measurement pipeline ──────────────────────────────────
-// Collects front-end funnel events + server-side purchase events.
-// Forwards to GA4 Measurement Protocol.
-// Multi-tenant by brand key (payment_tenants.tenant_id or sites.clients.id).
-// AGI-9000437
+// ─── cro-engine — CRO measurement pipeline + engine ─────────────────────────
+// Collector: front-end funnel events + server-side purchase -> GA4 Measurement Protocol (AGI-9000437).
+// Engine v1 (read-only): Measure/Diagnose/Hypothesise per tenant -> DB_SITES cro_* tables (AGI-9000326).
+// Multi-tenant by brand key.
 
 import { getTenant } from './tenants.js';
+import { runCro, readReport, TENANTS } from './cro.js';
 
-// ─── GA4 Measurement Protocol ───────────────────────────────────────────────
+// ─── GA4 Measurement Protocol ───────────────────────────────────────
 
 async function forwardToGA4(event, env) {
   if (!env.GA4_MEASUREMENT_ID) {
@@ -44,24 +44,15 @@ async function forwardToGA4(event, env) {
   }
 }
 
-// ─── Consent check ─────────────────────────────────────────────────────────
+// ─── Consent check ────────────────────────────────────────
 // TODO: Wire TrustCentre signal when available (AGI-9000260).
-// Zaraz fallback: check zaraz-consent cookie if no TrustCentre binding.
 
 async function checkConsent(req, tenant_id, env) {
-  // Placeholder: always allow for now.
-  // Phase 1: Check TrustCentre module if env.TRUST_CENTER binding available
-  // Phase 2: Fallback to Zaraz consent cookie parsing
-  // Phase 3: Block if no consent OR consent.analytics === false
-
   const cookieHeader = req.headers.get('Cookie') || '';
-  // Zaraz pattern: zaraz-consent={...} — would parse analytics flag if implemented
-  // For now: return true (all events fire, pre-consent gate)
   return true;
 }
 
-// ─── Front-end event handler ────────────────────────────────────────────────
-// POST /events — receives thin first-party signals from the frontend
+// ─── Front-end event handler ────────────────────────────────────
 
 async function handleFrontendEvent(req, env) {
   if (req.method !== 'POST') {
@@ -84,7 +75,6 @@ async function handleFrontendEvent(req, env) {
     });
   }
 
-  // Check consent before firing (AGI-9000074 / AGI-9000260 / AGI-9000131)
   const hasConsent = await checkConsent(req, tenant_id, env);
   if (!hasConsent) {
     return new Response(JSON.stringify({ success: false, reason: 'no_consent' }), {
@@ -93,7 +83,6 @@ async function handleFrontendEvent(req, env) {
     });
   }
 
-  // Build GA4 event
   const gaEvent = {
     name: event_name,
     params: {
@@ -107,7 +96,6 @@ async function handleFrontendEvent(req, env) {
     gaEvent.user_id = user_id;
   }
 
-  // Forward to GA4
   const success = await forwardToGA4(gaEvent, env);
 
   return new Response(JSON.stringify({ success }), {
@@ -116,8 +104,7 @@ async function handleFrontendEvent(req, env) {
   });
 }
 
-// ─── Server-side purchase event from stripe-payments ───────────────────────
-// POST /purchase — fired after a successful payment is recorded
+// ─── Server-side purchase event from stripe-payments ────────────────────
 
 async function handleServerPurchase(req, env) {
   if (req.method !== 'POST') {
@@ -131,14 +118,7 @@ async function handleServerPurchase(req, env) {
     return new Response('Invalid JSON', { status: 400 });
   }
 
-  const {
-    tenant_id,
-    email,
-    price_amount,     // minor units (pence for GBP)
-    currency,         // gbp, usd, etc.
-    session_id,
-    token,
-  } = body;
+  const { tenant_id, email, price_amount, currency, session_id, token } = body;
 
   if (!tenant_id || !email || !price_amount || !currency) {
     return new Response(
@@ -147,7 +127,6 @@ async function handleServerPurchase(req, env) {
     );
   }
 
-  // Convert pence to pounds for GA4 (which expects major units)
   const valueInMajorUnits = price_amount / 100;
 
   const gaEvent = {
@@ -170,24 +149,31 @@ async function handleServerPurchase(req, env) {
   });
 }
 
-// ─── Health check ──────────────────────────────────────────────────────────
+// ─── Health check ────────────────────────────────────────
 
 async function handleHealth(env) {
   const checks = {
     ga4_measurement_id: !!env.GA4_MEASUREMENT_ID,
     ga4_secret_store: !!env.GA4_API_SECRET,
     db_sites: !!env.DB_SITES,
+    ga4_data_api: !!env.GA4_SA, // Measure organ credential (cro-engine-ga4-read) — optional until provisioned
   };
+  // ga4_data_api is not required for the collector to be healthy.
+  const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
 
-  const ok = Object.values(checks).every(v => v);
-
-  return new Response(JSON.stringify({ ok, checks }), {
+  return new Response(JSON.stringify({ ok, service: 'cro-engine', checks }), {
     status: ok ? 200 : 503,
     headers: { 'Content-Type': 'application/json' },
   });
 }
 
-// ─── Main router ───────────────────────────────────────────────────────────
+// ─── CRO engine endpoints (read-only) ───────────────────────────────
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+// ─── Main router ──────────────────────────────────────────
 
 export default {
   async fetch(req, env) {
@@ -207,6 +193,19 @@ export default {
         return await handleHealth(env);
       }
 
+      // CRO engine (read-only): /cro/:tenant/report (GET) | /cro/:tenant/run (POST)
+      const cro = path.match(/^\/cro\/([^/]+)\/(report|run)$/);
+      if (cro) {
+        const tenant = decodeURIComponent(cro[1]);
+        if (cro[2] === 'report' && req.method === 'GET') {
+          return json(await readReport(env, tenant));
+        }
+        if (cro[2] === 'run' && req.method === 'POST') {
+          return json(await runCro(env, tenant));
+        }
+        return new Response('Method not allowed', { status: 405 });
+      }
+
       return new Response('Not found', { status: 404 });
     } catch (error) {
       console.error('Uncaught error:', error);
@@ -214,6 +213,13 @@ export default {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       });
+    }
+  },
+
+  // Daily CRO run per tenant (Measure/Diagnose/Hypothesise). No-ops gracefully until GA4_SA is provisioned.
+  async scheduled(event, env, ctx) {
+    for (const tenant of Object.keys(TENANTS)) {
+      ctx.waitUntil(runCro(env, tenant).catch((e) => console.error('cro cron', tenant, e && e.message)));
     }
   },
 };
