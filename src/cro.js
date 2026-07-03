@@ -14,6 +14,18 @@ export const TENANTS = {
   },
 };
 
+// Self-healing schema — guarantees the cro_* tables exist regardless of the deploy migration.
+async function ensureSchema(env) {
+  const stmts = [
+    "CREATE TABLE IF NOT EXISTS cro_signals (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, window_start TEXT NOT NULL, window_end TEXT NOT NULL, funnel_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))",
+    "CREATE TABLE IF NOT EXISTS cro_diagnoses (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, signal_id INTEGER, leaks_json TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))",
+    "CREATE TABLE IF NOT EXISTS cro_hypotheses (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant TEXT NOT NULL, leak TEXT NOT NULL, hypothesis TEXT NOT NULL, rationale TEXT, rank INTEGER, status TEXT NOT NULL DEFAULT 'proposed', created_at TEXT NOT NULL DEFAULT (datetime('now')))",
+  ];
+  for (const s of stmts) {
+    try { await env.DB_SITES.prepare(s).run(); } catch (e) { console.error('ensureSchema', e && e.message); }
+  }
+}
+
 function hypothesesFor(l) {
   const ideas = {
     'page_view->health_index_start': ['Make the primary CTA above the fold and single-purpose', 'State the value + time-to-complete next to the CTA'],
@@ -36,6 +48,7 @@ function hypothesesFor(l) {
 export async function runCro(env, tenant) {
   const cfg = TENANTS[tenant];
   if (!cfg) return { ok: false, reason: 'unknown_tenant' };
+  await ensureSchema(env);
   if (!env.GA4_SA) return { ok: false, reason: 'awaiting GA4 Data API credential (Secrets Store: cro-engine-ga4-read)' };
 
   let sa;
@@ -86,14 +99,17 @@ export async function runCro(env, tenant) {
   return { ok: true, tenant, funnel, leaks: leaks.slice(0, 5), hypotheses: hyps };
 }
 
-// Read the latest report for the Console CRO panel.
+// Read the latest report for the Console CRO panel. Resilient: never throws on empty/missing tables.
 export async function readReport(env, tenant) {
   if (!TENANTS[tenant]) return { tenant, error: 'unknown_tenant' };
-  const sig = await env.DB_SITES.prepare('SELECT * FROM cro_signals WHERE tenant=? ORDER BY id DESC LIMIT 1').bind(tenant).first();
-  const diag = await env.DB_SITES.prepare('SELECT * FROM cro_diagnoses WHERE tenant=? ORDER BY id DESC LIMIT 1').bind(tenant).first();
-  const hyps = await env.DB_SITES.prepare('SELECT leak,hypothesis,rationale,rank,status FROM cro_hypotheses WHERE tenant=? ORDER BY rank ASC LIMIT 10').bind(tenant).all();
+  await ensureSchema(env);
+  let sig = null, diag = null, hyps = { results: [] };
+  try { sig = await env.DB_SITES.prepare('SELECT * FROM cro_signals WHERE tenant=? ORDER BY id DESC LIMIT 1').bind(tenant).first(); } catch (e) { console.error('readReport signals', e && e.message); }
+  try { diag = await env.DB_SITES.prepare('SELECT * FROM cro_diagnoses WHERE tenant=? ORDER BY id DESC LIMIT 1').bind(tenant).first(); } catch (e) { console.error('readReport diagnoses', e && e.message); }
+  try { hyps = await env.DB_SITES.prepare('SELECT leak,hypothesis,rationale,rank,status FROM cro_hypotheses WHERE tenant=? ORDER BY rank ASC LIMIT 10').bind(tenant).all(); } catch (e) { console.error('readReport hypotheses', e && e.message); }
   return {
     tenant,
+    status: sig ? 'ok' : 'no_data_yet',
     measured_at: sig ? sig.created_at : null,
     funnel: sig ? JSON.parse(sig.funnel_json) : null,
     leaks: diag ? JSON.parse(diag.leaks_json) : [],
