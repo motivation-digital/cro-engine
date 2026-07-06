@@ -45,10 +45,29 @@ async function forwardToGA4(event, env) {
 }
 
 // ─── Consent check ────────────────────────────────────────
-// TODO: Wire TrustCentre signal when available (AGI-9000260).
+// Zaraz Consent (AGI-9000440) is the primary gate on the browser — when analytics consent is
+// denied the tag never fires, so /events is a belt-and-braces backstop. Block ONLY on an
+// explicit denial signal (body field or cookie); absence = allow, so legitimate live analytics
+// (which today carry no signal) keep flowing. Server-side /purchase is first-party transactional
+// and never calls this. TODO: wire TrustCentre signal when available (AGI-9000260).
 
-async function checkConsent(req, tenant_id, env) {
+function isDenied(value) {
+  const v = String(value || '').toLowerCase();
+  return v === 'denied' || v === 'false' || v === '0' || v === 'deny';
+}
+
+async function checkConsent(req, tenant_id, env, body) {
+  // Explicit body signal from the page takes precedence.
+  if (body && body.consent !== undefined) {
+    return !isDenied(body.consent);
+  }
+  // Fallback: a consent cookie if the CMP sets one on this origin.
   const cookieHeader = req.headers.get('Cookie') || '';
+  const match = cookieHeader.match(/(?:^|;\s*)(?:cf_consent|consent)=([^;]+)/i);
+  if (match) {
+    return !isDenied(decodeURIComponent(match[1]));
+  }
+  // No signal present -> allow (Zaraz already gated upstream).
   return true;
 }
 
@@ -75,7 +94,7 @@ async function handleFrontendEvent(req, env) {
     });
   }
 
-  const hasConsent = await checkConsent(req, tenant_id, env);
+  const hasConsent = await checkConsent(req, tenant_id, env, body);
   if (!hasConsent) {
     return new Response(JSON.stringify({ success: false, reason: 'no_consent' }), {
       status: 200,
