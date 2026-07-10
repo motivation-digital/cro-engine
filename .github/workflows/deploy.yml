@@ -35,10 +35,12 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GA4_SA_JSON: ${{ secrets.GA4_SA_JSON }}
+          TYPEFORM_WEBHOOK_SECRET: ${{ secrets.TYPEFORM_WEBHOOK_SECRET }}
         run: |
-          # Build metadata via Node so the SA JSON (quotes + \n) embeds safely as a secret_text binding.
+          # Build metadata via Node so secrets (quotes + \n) embed safely as secret_text bindings.
           # GA4_SA delivered as a Worker secret_text (GitHub secret GA4_SA_JSON) because a Google SA key
           # (~2.3KB) exceeds the Cloudflare Secrets Store 1024-char cap. Encrypted at rest; never committed.
+          # TYPEFORM_WEBHOOK_SECRET is optional — when set it turns on webhook HMAC verification.
           node -e '
             const fs = require("fs");
             const bindings = [
@@ -51,6 +53,12 @@ jobs:
               console.log("GA4_SA binding: attached");
             } else {
               console.log("GA4_SA binding: SKIPPED (GA4_SA_JSON secret empty)");
+            }
+            if (process.env.TYPEFORM_WEBHOOK_SECRET && process.env.TYPEFORM_WEBHOOK_SECRET.trim()) {
+              bindings.push({ type: "secret_text", name: "TYPEFORM_WEBHOOK_SECRET", text: process.env.TYPEFORM_WEBHOOK_SECRET });
+              console.log("TYPEFORM_WEBHOOK_SECRET binding: attached (webhook verification ON)");
+            } else {
+              console.log("TYPEFORM_WEBHOOK_SECRET binding: SKIPPED (webhook accepts unverified)");
             }
             const metadata = {
               main_module: "worker.js",
@@ -125,5 +133,5 @@ jobs:
       - name: Smoke test
         run: |
           echo "✓ Deployed via CF API (HTTP 200); collector + CRO engine v1 (read-only)"
-          echo "✓ /cro/dreambody.club/report + /run live; daily cron registered"
+          echo "✓ /events /purchase /typeform collectors live; /cro/:tenant/report + /run live; daily cron registered"
           echo "✓ Measure switches on when GA4_SA (GA4_SA_JSON) is bound"

@@ -6,9 +6,12 @@
 import { getTenant } from './tenants.js';
 import { runCro, readReport, TENANTS } from './cro.js';
 
-// ─── GA4 Measurement Protocol ───────────────────────────────────────
+// ─── GA4 Measurement Protocol ──────────────────────
 
-async function forwardToGA4(event, env) {
+// clientId: GA4 MP drops events without a client_id. Callers pass a stable id (e.g. a Typeform
+// token or Stripe session) so related events attribute together; otherwise a random id is used
+// so the event still lands.
+async function forwardToGA4(event, env, clientId) {
   if (!env.GA4_MEASUREMENT_ID) {
     console.warn('GA4_MEASUREMENT_ID not set');
     return;
@@ -23,6 +26,7 @@ async function forwardToGA4(event, env) {
   const payload = {
     measurement_id: env.GA4_MEASUREMENT_ID,
     api_secret: secret,
+    client_id: clientId || crypto.randomUUID(),
     events: [event],
   };
 
@@ -44,7 +48,7 @@ async function forwardToGA4(event, env) {
   }
 }
 
-// ─── Consent check ────────────────────────────────────────
+// ─── Consent check ───────────────────────────
 // Zaraz Consent (AGI-9000440) is the primary gate on the browser — when analytics consent is
 // denied the tag never fires, so /events is a belt-and-braces backstop. Block ONLY on an
 // explicit denial signal (body field or cookie); absence = allow, so legitimate live analytics
@@ -71,7 +75,7 @@ async function checkConsent(req, tenant_id, env, body) {
   return true;
 }
 
-// ─── Front-end event handler ────────────────────────────────────
+// ─── Front-end event handler ────────────────────────
 
 async function handleFrontendEvent(req, env) {
   if (req.method !== 'POST') {
@@ -115,7 +119,7 @@ async function handleFrontendEvent(req, env) {
     gaEvent.user_id = user_id;
   }
 
-  const success = await forwardToGA4(gaEvent, env);
+  const success = await forwardToGA4(gaEvent, env, session_id || user_id);
 
   return new Response(JSON.stringify({ success }), {
     status: success ? 200 : 502,
@@ -123,7 +127,7 @@ async function handleFrontendEvent(req, env) {
   });
 }
 
-// ─── Server-side purchase event from stripe-payments ────────────────────
+// ─── Server-side purchase event from stripe-payments ────────────────
 
 async function handleServerPurchase(req, env) {
   if (req.method !== 'POST') {
@@ -160,7 +164,7 @@ async function handleServerPurchase(req, env) {
     },
   };
 
-  const success = await forwardToGA4(gaEvent, env);
+  const success = await forwardToGA4(gaEvent, env, session_id || token);
 
   return new Response(JSON.stringify({ success }), {
     status: success ? 200 : 502,
@@ -168,16 +172,79 @@ async function handleServerPurchase(req, env) {
   });
 }
 
-// ─── Health check ────────────────────────────────────────
+// ─── Typeform webhook (health_index_complete) ────────────────────
+// The DBC health-index quiz is a Typeform popup (form nwPP4TfP). Typeform Plus keeps webhooks
+// (the native GA4 connector is gated behind Business) — so on submit Typeform POSTs here and we
+// forward a health_index_complete conversion to GA4 server-side. Reliable (fires even if the tab
+// closes), no client JS, no CSP change, no plan upgrade.
+// Signature: if TYPEFORM_WEBHOOK_SECRET is bound, verify the `Typeform-Signature` header
+// (sha256=base64(HMAC-SHA256(secret, rawBody))); if unset, accept (turn on verification later).
+
+async function hmacSha256Base64(secret, message) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  const bytes = new Uint8Array(sig);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+async function handleTypeform(req, env) {
+  if (req.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405 });
+  }
+  const raw = await req.text();
+
+  const secret = env.TYPEFORM_WEBHOOK_SECRET; // secret_text string, optional
+  if (secret) {
+    const provided = req.headers.get('typeform-signature') || '';
+    const expected = 'sha256=' + (await hmacSha256Base64(secret, raw));
+    if (provided !== expected) {
+      return new Response(JSON.stringify({ success: false, reason: 'bad_signature' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  }
+
+  let body;
+  try { body = JSON.parse(raw); } catch { return new Response('Invalid JSON', { status: 400 }); }
+
+  const fr = (body && body.form_response) || {};
+  const clientId = fr.token || crypto.randomUUID();
+  const gaEvent = {
+    name: 'health_index_complete',
+    params: {
+      form_id: fr.form_id || '',
+      session_id: fr.token || '',
+      engagement_time_msec: String(100),
+    },
+  };
+
+  const success = await forwardToGA4(gaEvent, env, clientId);
+  return new Response(JSON.stringify({ success, verified: !!secret }), {
+    status: success ? 200 : 502,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+// ─── Health check ───────────────────────────
 
 async function handleHealth(env) {
   const checks = {
     ga4_measurement_id: !!env.GA4_MEASUREMENT_ID,
     ga4_secret_store: !!env.GA4_API_SECRET,
     db_sites: !!env.DB_SITES,
-    ga4_data_api: !!env.GA4_SA, // Measure organ credential (cro-engine-ga4-read) — optional until provisioned
+    ga4_data_api: !!env.GA4_SA, // Measure organ credential (GA4_SA_JSON) — optional until provisioned
+    typeform_verify: !!env.TYPEFORM_WEBHOOK_SECRET, // webhook HMAC verification on/off (optional)
   };
-  // ga4_data_api is not required for the collector to be healthy.
+  // ga4_data_api / typeform_verify are not required for the collector to be healthy.
   const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
 
   return new Response(JSON.stringify({ ok, service: 'cro-engine', checks }), {
@@ -186,13 +253,13 @@ async function handleHealth(env) {
   });
 }
 
-// ─── CRO engine endpoints (read-only) ───────────────────────────────
+// ─── CRO engine endpoints (read-only) ───────────────────
 
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-// ─── Main router ──────────────────────────────────────────
+// ─── Main router ─────────────────────────
 
 export default {
   async fetch(req, env) {
@@ -206,6 +273,10 @@ export default {
 
       if (path === '/purchase' && req.method === 'POST') {
         return await handleServerPurchase(req, env);
+      }
+
+      if (path === '/typeform' && req.method === 'POST') {
+        return await handleTypeform(req, env);
       }
 
       if (path === '/health') {
