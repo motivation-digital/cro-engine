@@ -49,10 +49,14 @@ export async function runCro(env, tenant) {
   const cfg = TENANTS[tenant];
   if (!cfg) return { ok: false, reason: 'unknown_tenant' };
   await ensureSchema(env);
-  if (!env.GA4_SA) return { ok: false, reason: 'awaiting GA4 Data API credential (Secrets Store: cro-engine-ga4-read)' };
+  if (!env.GA4_SA) return { ok: false, reason: 'awaiting GA4 Data API credential (GitHub secret GA4_SA_JSON -> binding GA4_SA)' };
 
   let sa;
-  try { sa = JSON.parse(await env.GA4_SA.get()); } catch { return { ok: false, reason: 'GA4_SA secret unreadable' }; }
+  try {
+    // GA4_SA is a secret_text binding (plain string) or a Secrets Store binding (.get()).
+    const raw = typeof env.GA4_SA === 'string' ? env.GA4_SA : await env.GA4_SA.get();
+    sa = JSON.parse(raw);
+  } catch { return { ok: false, reason: 'GA4_SA secret unreadable' }; }
 
   // ── Measure ──
   let counts;

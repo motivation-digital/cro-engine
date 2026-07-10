@@ -34,12 +34,37 @@ jobs:
       - name: Deploy worker script via Cloudflare API
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GA4_SA_JSON: ${{ secrets.GA4_SA_JSON }}
         run: |
+          # Build metadata via Node so the SA JSON (quotes + \n) embeds safely as a secret_text binding.
+          # GA4_SA delivered as a Worker secret_text (GitHub secret GA4_SA_JSON) because a Google SA key
+          # (~2.3KB) exceeds the Cloudflare Secrets Store 1024-char cap. Encrypted at rest; never committed.
+          node -e '
+            const fs = require("fs");
+            const bindings = [
+              { type: "plain_text", name: "GA4_MEASUREMENT_ID", text: "G-KQH8EKYZ9L" },
+              { type: "secrets_store_secret", name: "GA4_API_SECRET", secret_name: "cro-engine-dbc", store_id: "170e0688af5f479292e0ab52c980eff7" },
+              { type: "d1", name: "DB_SITES", database_id: process.env.DB_SITES_ID },
+            ];
+            if (process.env.GA4_SA_JSON && process.env.GA4_SA_JSON.trim()) {
+              bindings.push({ type: "secret_text", name: "GA4_SA", text: process.env.GA4_SA_JSON });
+              console.log("GA4_SA binding: attached");
+            } else {
+              console.log("GA4_SA binding: SKIPPED (GA4_SA_JSON secret empty)");
+            }
+            const metadata = {
+              main_module: "worker.js",
+              compatibility_date: "2025-04-01",
+              keep_bindings: ["secret_text", "d1", "service", "kv_namespace", "r2_bucket", "secrets_store_secret", "secret_key", "ai"],
+              bindings,
+            };
+            fs.writeFileSync("/tmp/metadata.json", JSON.stringify(metadata));
+          '
           HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/cf-resp.json -X PUT \
             "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}" \
             -H "Authorization: Bearer ${CF_API_TOKEN}" \
             -F "worker.js=@dist/worker.js;type=application/javascript+module" \
-            -F 'metadata={"main_module":"worker.js","compatibility_date":"2025-04-01","keep_bindings":["secret_text","d1","service","kv_namespace","r2_bucket","secrets_store_secret","secret_key","ai"],"bindings":[{"type":"plain_text","name":"GA4_MEASUREMENT_ID","text":"G-KQH8EKYZ9L"},{"type":"secrets_store_secret","name":"GA4_API_SECRET","secret_name":"cro-engine-dbc","store_id":"170e0688af5f479292e0ab52c980eff7"},{"type":"d1","name":"DB_SITES","database_id":"80499765-3704-4c5d-ad25-ab88592fb075"}]};type=application/json')
+            -F "metadata=@/tmp/metadata.json;type=application/json")
           echo "HTTP $HTTP_CODE"
           echo "Response body:"
           cat /tmp/cf-resp.json
@@ -48,11 +73,6 @@ jobs:
             echo "::error::Deploy failed with HTTP $HTTP_CODE"
             exit 1
           fi
-
-      # NOTE: the Measure organ needs a GA4 Data API service-account credential.
-      # Once secret 'cro-engine-ga4-read' exists in the Secrets Store, add this binding
-      # (keep_bindings preserves it thereafter, or add here):
-      #   {"type":"secrets_store_secret","name":"GA4_SA","secret_name":"cro-engine-ga4-read","store_id":"170e0688af5f479292e0ab52c980eff7"}
 
       - name: Migrate D1 — CRO tables (idempotent)
         continue-on-error: true
@@ -99,10 +119,11 @@ jobs:
             exit 1
           fi
           grep -q '"DB_SITES"' /tmp/cf-settings.json || { echo "::error::D1 DB_SITES binding missing"; exit 1; }
+          grep -q '"GA4_SA"' /tmp/cf-settings.json && echo "PASS: GA4_SA (Measure credential) bound" || echo "WARN: GA4_SA not bound — Measure stays dark"
           echo "PASS: critical bindings check complete"
 
       - name: Smoke test
         run: |
           echo "✓ Deployed via CF API (HTTP 200); collector + CRO engine v1 (read-only)"
           echo "✓ /cro/dreambody.club/report + /run live; daily cron registered"
-          echo "✓ Measure switches on when GA4_SA (cro-engine-ga4-read) is bound"
+          echo "✓ Measure switches on when GA4_SA (GA4_SA_JSON) is bound"
