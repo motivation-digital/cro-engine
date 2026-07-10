@@ -7,10 +7,14 @@ import { eventCounts } from './ga4.js';
 const WINDOW_DAYS = 28;
 
 // Tenant registry (tenant-zero). Mirrors brands/{tenant}/convert-profile.md in the lifecycle repo.
+// DBC funnel = the events actually instrumented (AGI-9000590):
+//   page_view (Tag Gateway) -> health_index_complete (Typeform webhook) -> begin_checkout
+//   (stripe-payments) -> purchase (stripe-payments) -> member_activate (auth, pending).
+// health_index_start is intentionally omitted (intra-quiz drop-off is a Typeform Business feature).
 export const TENANTS = {
   'dreambody.club': {
     ga4_property: '542615107',
-    funnel: ['page_view', 'health_index_start', 'health_index_complete', 'begin_checkout', 'purchase', 'member_activate'],
+    funnel: ['page_view', 'health_index_complete', 'begin_checkout', 'purchase', 'member_activate'],
   },
 };
 
@@ -28,9 +32,8 @@ async function ensureSchema(env) {
 
 function hypothesesFor(l) {
   const ideas = {
-    'page_view->health_index_start': ['Make the primary CTA above the fold and single-purpose', 'State the value + time-to-complete next to the CTA'],
-    'health_index_start->health_index_complete': ['Shorten the quiz / add a progress bar', 'Reduce required fields; defer optional questions'],
-    'health_index_complete->begin_checkout': ['Tighten results->offer; restate the personalised value', 'Add social proof + risk-reversal near the offer'],
+    'page_view->health_index_complete': ['Make the primary CTA above the fold and single-purpose; state the value + 5-min time-to-complete', 'Reduce quiz friction — shorten it, add a progress bar, defer optional questions'],
+    'health_index_complete->begin_checkout': ['Tighten results->offer; restate the personalised value + score', 'Add social proof + risk-reversal near the offer'],
     'begin_checkout->purchase': ['Reduce checkout friction (fewer fields, wallet pay)', 'Surface trust signals + clear price at checkout'],
     'purchase->member_activate': ['Stronger post-purchase onboarding / first-session nudge', 'Email + in-app prompt to complete activation'],
   };
