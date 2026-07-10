@@ -75,7 +75,7 @@ export async function recommend(env, tenant, cid) {
 
   // Budget / spend rollup.
   const enabledBudget = campaigns.filter((c) => c.status === 'ENABLED').reduce((s, c) => s + (c.dailyBudget || 0), 0);
-  const ceiling = cfg ? (cfg.daily_ceiling_gbp ?? cfg.ceiling ?? null) : null;
+  const ceiling = cfg ? (cfg.dailyCeilingGbp ?? cfg.daily_ceiling_gbp ?? null) : null;
   const spend30 = campaigns.reduce((s, c) => s + (c.cost || 0), 0);
   const conv30 = campaigns.reduce((s, c) => s + (c.conversions || 0), 0);
 
@@ -105,6 +105,16 @@ export async function recommend(env, tenant, cid) {
       search_terms: searchTerms.length,
       recommendations: recs.length,
     },
+    bidding: campaigns.map((c) => ({
+      campaign: c.name,
+      status: c.status,
+      strategy: c.biddingStrategy,
+      cpc_bid_ceiling_gbp: c.cpcBidCeiling || null,
+      target_cpa_gbp: c.targetCpa || null,
+      target_roas: c.targetRoas || null,
+      avg_cpc_gbp: c.avgCpc || null,
+      daily_budget_gbp: c.dailyBudget || null,
+    })),
     recommendations: recs.slice(0, 25),
   };
 }
