@@ -79,7 +79,22 @@ export async function recommend(env, tenant, cid) {
   const spend30 = campaigns.reduce((s, c) => s + (c.cost || 0), 0);
   const conv30 = campaigns.reduce((s, c) => s + (c.conversions || 0), 0);
 
-  // Rule 3 — the gating priority: no conversions imported means bidding optimises to clicks, not leads.
+  // Rule 3 — CPC bid ceiling choking delivery: a max-CPC cap well below the market average CPC
+  // means bids rarely win the auction, so spend/impressions stall regardless of budget.
+  campaigns.forEach((c) => {
+    if (c.status === 'ENABLED' && c.cpcBidCeiling && c.avgCpc && c.cpcBidCeiling < c.avgCpc) {
+      recs.push({
+        type: 'raise_cpc_ceiling',
+        priority: 'high',
+        target: c.name,
+        rationale: `Max-CPC ceiling £${c.cpcBidCeiling.toFixed(2)} vs market avg CPC £${c.avgCpc.toFixed(2)} (${(c.avgCpc / c.cpcBidCeiling).toFixed(1)}×) — bids can't win auctions, delivery is choked. Raise the CPC ceiling (stays within the £${ceiling ?? '?'} daily-budget guard) or move to conversion bidding once #2 lands.`,
+        apply: { method: 'MANUAL', path: `campaign ${c.id} bidding — Google Ads console (no CPC-ceiling API endpoint yet)`, body: null },
+        score: 5e8,
+      });
+    }
+  });
+
+  // Rule 4 — the gating priority: no conversions imported means bidding optimises to clicks, not leads.
   if (conv30 === 0 && spend30 > 0) recs.unshift({
     type: 'wire_conversions',
     priority: 'critical',
