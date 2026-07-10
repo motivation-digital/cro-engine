@@ -5,6 +5,7 @@
 
 import { getTenant } from './tenants.js';
 import { runCro, readReport, TENANTS } from './cro.js';
+import { recommend } from './operator.js';
 
 // ─── GA4 Measurement Protocol ──────────────────────
 
@@ -243,6 +244,7 @@ async function handleHealth(env) {
     db_sites: !!env.DB_SITES,
     ga4_data_api: !!env.GA4_SA, // Measure organ credential (GA4_SA_JSON) — optional until provisioned
     typeform_verify: !!env.TYPEFORM_WEBHOOK_SECRET, // webhook HMAC verification on/off (optional)
+    gads_operator: !!env.GADS && !!env.GADS_ADMIN_KEY, // CRO Operator -> gads-service (recommend)
   };
   // ga4_data_api / typeform_verify are not required for the collector to be healthy.
   const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
@@ -281,6 +283,12 @@ export default {
 
       if (path === '/health') {
         return await handleHealth(env);
+      }
+
+      // CRO Operator (read-only recommend): /operator/:tenant/recommend?cid= (GET)
+      const op = path.match(/^/operator/([^/]+)/recommend$/);
+      if (op && req.method === 'GET') {
+        return json(await recommend(env, decodeURIComponent(op[1]), url.searchParams.get('cid')));
       }
 
       // CRO engine (read-only): /cro/:tenant/report (GET) | /cro/:tenant/run (POST)
