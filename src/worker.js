@@ -286,9 +286,9 @@ export default {
       }
 
       // CRO Operator (read-only recommend): /operator/:tenant/recommend?cid= (GET)
-      const op = path.match(/^/operator/([^/]+)/recommend$/);
-      if (op && req.method === 'GET') {
-        return json(await recommend(env, decodeURIComponent(op[1]), url.searchParams.get('cid')));
+      if (path.startsWith('/operator/') && path.endsWith('/recommend') && req.method === 'GET') {
+        const tenant = decodeURIComponent(path.slice('/operator/'.length, -('/recommend'.length)));
+        return json(await recommend(env, tenant, url.searchParams.get('cid')));
       }
 
       // CRO engine (read-only): /cro/:tenant/report (GET) | /cro/:tenant/run (POST)
