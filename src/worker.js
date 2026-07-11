@@ -6,6 +6,7 @@
 import { getTenant } from './tenants.js';
 import { runCro, readReport, TENANTS } from './cro.js';
 import { recommend } from './operator.js';
+import { funnel } from './funnel.js';
 
 // ─── GA4 Measurement Protocol ──────────────────────
 
@@ -283,6 +284,11 @@ export default {
 
       if (path === '/health') {
         return await handleHealth(env);
+      }
+
+      // Funnel KPIs (read-only): /funnel/:tenant (GET) — one front-to-back view from every source.
+      if (path.startsWith('/funnel/') && req.method === 'GET') {
+        return json(await funnel(env, decodeURIComponent(path.slice('/funnel/'.length))));
       }
 
       // CRO Operator (read-only recommend): /operator/:tenant/recommend?cid= (GET)

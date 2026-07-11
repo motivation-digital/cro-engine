@@ -47,6 +47,8 @@ jobs:
               { type: "plain_text", name: "GA4_MEASUREMENT_ID", text: "G-KQH8EKYZ9L" },
               { type: "secrets_store_secret", name: "GA4_API_SECRET", secret_name: "cro-engine-dbc", store_id: "170e0688af5f479292e0ab52c980eff7" },
               { type: "d1", name: "DB_SITES", database_id: process.env.DB_SITES_ID },
+              { type: "d1", name: "DB_INDEX", database_id: "4cce8f4d-c867-4b9a-9f3a-bb34d4ab76fe" },
+              { type: "d1", name: "DB_PAYMENTS", database_id: "fdd09c88-c232-4ed8-8d0e-53179d61b22c" },
               { type: "service", name: "GADS", service: "gads-service" },
               { type: "secrets_store_secret", name: "GADS_ADMIN_KEY", secret_name: "gads_admin_key", store_id: "170e0688af5f479292e0ab52c980eff7" },
             ];
