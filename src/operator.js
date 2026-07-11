@@ -47,7 +47,9 @@ export async function recommend(env, tenant, cid) {
   const convActions = conv.conversions || [];
   // Are the survey conversions (survey_start / health_index_complete) imported to Ads? While they
   // are not, we are flying blind (doctrine row 19) and must NOT recommend raising bids (row 12/13).
-  const surveyConvImported = convActions.some((c) => /health_index_complete|survey_start/i.test(c.name || ''));
+  // Matches the lead conversion action however it is named: "Health Index lead" (the one created
+  // for the offline gclid upload), health_index_complete, or survey_start.
+  const surveyConvImported = convActions.some((c) => /health.?index|survey.?start/i.test(c.name || ''));
   const adList = (ads.ads || []).filter((a) => a.status !== 'REMOVED');
   const nameToId = {};
   campaigns.forEach((c) => { if (c.name) nameToId[c.name] = c.id; });
