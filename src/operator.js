@@ -33,14 +33,16 @@ export async function recommend(env, tenant, cid) {
   }
   cid = digits(cid);
 
-  const [camp, terms, ads, cfg] = await Promise.all([
+  const [camp, terms, ads, cfg, kw] = await Promise.all([
     gads(env, `/accounts/${cid}/campaigns?days=30`).catch(() => ({ campaigns: [] })),
     gads(env, `/accounts/${cid}/search-terms?days=30`).catch(() => ({ searchTerms: [] })),
     gads(env, `/accounts/${cid}/ads`).catch(() => ({ ads: [] })),
     gads(env, `/accounts/${cid}/config`).catch(() => null),
+    gads(env, `/accounts/${cid}/keywords?days=30`).catch(() => ({ keywords: [] })),
   ]);
   const campaigns = camp.campaigns || [];
   const searchTerms = terms.searchTerms || [];
+  const keywords = kw.keywords || [];
   const adList = (ads.ads || []).filter((a) => a.status !== 'REMOVED');
   const nameToId = {};
   campaigns.forEach((c) => { if (c.name) nameToId[c.name] = c.id; });
@@ -106,11 +108,42 @@ export async function recommend(env, tenant, cid) {
 
   recs.sort((a, b) => (b.score || 0) - (a.score || 0));
 
+  // ── DBC ads doctrine check (brands/dreambody/ads.md DO-NOT table) ─────────────
+  // The engine enforces the framework so no session has to remember it. DBC-specific
+  // (tenant dreambody.club); other tenants skip until they have their own table.
+  const doctrine = [];
+  if (tenant === 'dreambody.club') {
+    const MEDICAL = /кров|разрыв|орган|гормон|витамин|спрей|боль|болит|лечени|врач|таблетк|мигрен|головн|первые дни/i;
+    const INFORMATIONAL = /^\s*(как|сколько|что|почему|зачем)\b|влияет ли/i;
+    const flag = (row, severity, detail, fix) => doctrine.push({ row, severity, detail, fix });
+
+    // Row 12 — max CPC must stay £0.15 until survey_start is visible in Ads.
+    campaigns.filter((c) => c.cpcBidCeiling && c.cpcBidCeiling > 0.15).forEach((c) =>
+      flag(12, 'high', `${c.name}: max CPC £${c.cpcBidCeiling.toFixed(2)} exceeds the held £0.15`, 'revert to £0.15 unless Christopher raised it after survey_start is visible'));
+    // Row 13 — never Maximize Clicks uncapped.
+    campaigns.filter((c) => c.biddingStrategy === 'TARGET_SPEND' && !c.cpcBidCeiling).forEach((c) =>
+      flag(13, 'critical', `${c.name}: Maximize Clicks with no CPC ceiling`, 'set a max CPC bid limit immediately'));
+    // Row 5 — phrase/exact only, no broad.
+    keywords.filter((k) => /BROAD/i.test(k.matchType || '')).forEach((k) =>
+      flag(5, 'high', `broad match keyword "${k.keyword}"`, 'change to phrase or exact'));
+    // Row 6 — no medical intent.
+    keywords.filter((k) => MEDICAL.test(k.keyword || '')).forEach((k) =>
+      flag(6, 'high', `medical-intent keyword "${k.keyword}"`, 'pause; medical intent belongs to content, never ads'));
+    // Row 4 — informational queries belong to the article campaign, not main.
+    keywords.filter((k) => INFORMATIONAL.test(k.keyword || '')).forEach((k) =>
+      flag(4, 'medium', `informational keyword "${k.keyword}"`, 'move to the C0 article campaign (≤£0.15) or organic'));
+    // Row 19 — flying blind until survey_start / health_index_complete are imported.
+    if (conv30 === 0)
+      flag(19, 'critical', 'no survey_start / health_index_complete conversion imported to Ads', 'import the GA4 key events before scaling anything');
+    doctrine.sort((a, b) => ({ critical: 0, high: 1, medium: 2 }[a.severity] - { critical: 0, high: 1, medium: 2 }[b.severity]));
+  }
+
   return {
     ok: true,
     tenant,
     cid,
     generated_days: 30,
+    doctrine,
     summary: {
       campaigns: campaigns.length,
       enabled_daily_budget_gbp: Number(enabledBudget.toFixed(2)),
