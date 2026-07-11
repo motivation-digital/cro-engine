@@ -44,17 +44,30 @@ export async function funnel(env, tenant) {
   }
 
   // ── Checkouts + buyers (payments D1); test transactions excluded from buyers ──
+  // Every succeeded payment to date is a Christopher test (confirmed 2026-07-11) — the
+  // email heuristic only caught some of them, so we also gate on REAL_BUYERS_SINCE: a real
+  // buyer is a succeeded payment after that cutoff AND not a known test address. When a
+  // genuine sale lands, lower this date to include it (there are zero to exclude before it).
+  const REAL_BUYERS_SINCE = '2026-07-11';
   if (env.DB_PAYMENTS) {
     const co = await row(env.DB_PAYMENTS,
       "SELECT COUNT(DISTINCT email) started_distinct, " +
       "SUM(CASE WHEN datetime(created_at)>datetime('now','-7 days') THEN 1 ELSE 0 END) started_7d FROM payments");
+    const testFilter = "email NOT LIKE '%@motivation.digital' AND email NOT LIKE '%baranenko%' " +
+      "AND datetime(created_at) > datetime('" + REAL_BUYERS_SINCE + "')";
     const b = await row(env.DB_PAYMENTS,
       "SELECT COUNT(*) total, " +
       "SUM(CASE WHEN datetime(created_at)>datetime('now','-7 days') THEN 1 ELSE 0 END) d7, " +
-      "SUM(price_amount) rev_pence FROM payments WHERE status='succeeded' " +
-      "AND email NOT LIKE '%@motivation.digital' AND email NOT LIKE '%baranenko%'");
+      "SUM(price_amount) rev_pence FROM payments WHERE status='succeeded' AND " + testFilter);
+    const succeeded = await row(env.DB_PAYMENTS,
+      "SELECT COUNT(*) total FROM payments WHERE status='succeeded'");
     out.stages.checkout_starts = { distinct_people: co.started_distinct, last7d: co.started_7d, _error: co._error };
-    out.stages.buyers = { total: b.total || 0, last7d: b.d7 || 0, revenue_gbp: (b.rev_pence || 0) / 100, note: 'test transactions (motivation.digital / baranenko) excluded', _error: b._error };
+    out.stages.buyers = {
+      total: b.total || 0, last7d: b.d7 || 0, revenue_gbp: (b.rev_pence || 0) / 100,
+      succeeded_all_time: succeeded.total || 0,
+      note: `${succeeded.total || 0} succeeded payments to date are all confirmed test purchases; real buyers count from ${REAL_BUYERS_SINCE}`,
+      _error: b._error,
+    };
   }
 
   // ── Paid engagement (Google Ads, 7d) ──
@@ -75,9 +88,9 @@ export async function funnel(env, tenant) {
   } catch (e) { out.stages.traffic_7d = { error: String(e && e.message) }; }
 
   // ── Known measurement gaps (be honest about what we cannot yet see) ──
-  out.gaps.push('offer_section_visibility — not instrumented; cannot see if a completer reaches the paid offer on /results (the NOOM hinge)');
+  out.gaps.push('offer_section_visibility — no page-reading tool yet (Microsoft Clarity / Hotjar); cannot see if a completer scrolls to the paid offer on /results (the NOOM hinge)');
   out.gaps.push('video_to_site linkage — cannot tie YouTube views to landing visits or completions');
-  out.gaps.push('quiz_start — completions are known (D1) but quiz-starts are not captured, so completion RATE is unmeasured here');
+  out.gaps.push('quiz_start — completions ARE known (D1 contacts, in admin); only quiz STARTS are not here (they live in Typeform analytics — the source of the ~65% completion rate), so completion RATE is not shown in this view');
 
   return out;
 }
