@@ -33,16 +33,18 @@ export async function recommend(env, tenant, cid) {
   }
   cid = digits(cid);
 
-  const [camp, terms, ads, cfg, kw] = await Promise.all([
+  const [camp, terms, ads, cfg, kw, conv] = await Promise.all([
     gads(env, `/accounts/${cid}/campaigns?days=30`).catch(() => ({ campaigns: [] })),
     gads(env, `/accounts/${cid}/search-terms?days=30`).catch(() => ({ searchTerms: [] })),
     gads(env, `/accounts/${cid}/ads`).catch(() => ({ ads: [] })),
     gads(env, `/accounts/${cid}/config`).catch(() => null),
     gads(env, `/accounts/${cid}/keywords?days=30`).catch(() => ({ keywords: [] })),
+    gads(env, `/accounts/${cid}/conversions`).catch(() => ({ conversions: [] })),
   ]);
   const campaigns = camp.campaigns || [];
   const searchTerms = terms.searchTerms || [];
   const keywords = kw.keywords || [];
+  const convActions = conv.conversions || [];
   const adList = (ads.ads || []).filter((a) => a.status !== 'REMOVED');
   const nameToId = {};
   campaigns.forEach((c) => { if (c.name) nameToId[c.name] = c.id; });
@@ -113,7 +115,7 @@ export async function recommend(env, tenant, cid) {
   // (tenant dreambody.club); other tenants skip until they have their own table.
   const doctrine = [];
   if (tenant === 'dreambody.club') {
-    const MEDICAL = /кров|разрыв|орган|гормон|витамин|спрей|боль|болит|лечени|врач|таблетк|мигрен|головн|первые дни/i;
+    const MEDICAL = /кров|разрыв|орган(?!изм)|гормон|витамин|спрей|боль|болит|лечени|врач|таблетк|мигрен|головн|первые дни/i;
     const INFORMATIONAL = /^\s*(как|сколько|что|почему|зачем)\b|влияет ли/i;
     const flag = (row, severity, detail, fix) => doctrine.push({ row, severity, detail, fix });
 
@@ -132,9 +134,11 @@ export async function recommend(env, tenant, cid) {
     // Row 4 — informational queries belong to the article campaign, not main.
     keywords.filter((k) => INFORMATIONAL.test(k.keyword || '')).forEach((k) =>
       flag(4, 'medium', `informational keyword "${k.keyword}"`, 'move to the C0 article campaign (≤£0.15) or organic'));
-    // Row 19 — flying blind until survey_start / health_index_complete are imported.
-    if (conv30 === 0)
-      flag(19, 'critical', 'no survey_start / health_index_complete conversion imported to Ads', 'import the GA4 key events before scaling anything');
+    // Row 19 — flying blind until survey_start / health_index_complete are imported as Ads conversions.
+    // Checked against the actual conversion actions, not a click/conv count (a stray purchase must not mask it).
+    const hasSurveyConv = convActions.some((c) => /health_index_complete|survey_start/i.test(c.name || ''));
+    if (!hasSurveyConv)
+      flag(19, 'critical', `survey_start / health_index_complete not imported to Ads (present: ${convActions.map((c) => c.name).join(', ') || 'none'})`, 'mark them GA4 key events and import; do not scale until survey starts are visible');
     doctrine.sort((a, b) => ({ critical: 0, high: 1, medium: 2 }[a.severity] - { critical: 0, high: 1, medium: 2 }[b.severity]));
   }
 
