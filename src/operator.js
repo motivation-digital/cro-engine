@@ -45,6 +45,9 @@ export async function recommend(env, tenant, cid) {
   const searchTerms = terms.searchTerms || [];
   const keywords = kw.keywords || [];
   const convActions = conv.conversions || [];
+  // Are the survey conversions (survey_start / health_index_complete) imported to Ads? While they
+  // are not, we are flying blind (doctrine row 19) and must NOT recommend raising bids (row 12/13).
+  const surveyConvImported = convActions.some((c) => /health_index_complete|survey_start/i.test(c.name || ''));
   const adList = (ads.ads || []).filter((a) => a.status !== 'REMOVED');
   const nameToId = {};
   campaigns.forEach((c) => { if (c.name) nameToId[c.name] = c.id; });
@@ -84,9 +87,10 @@ export async function recommend(env, tenant, cid) {
   const conv30 = campaigns.reduce((s, c) => s + (c.conversions || 0), 0);
 
   // Rule 3 — CPC bid ceiling choking delivery: a max-CPC cap well below the market average CPC
-  // means bids rarely win the auction, so spend/impressions stall regardless of budget.
+  // means bids rarely win the auction. BUT never recommend raising bids while blind on survey
+  // conversions (doctrine rows 12/19) — cheap delivery is the point until leads are visible.
   campaigns.forEach((c) => {
-    if (c.status === 'ENABLED' && c.cpcBidCeiling && c.avgCpc && c.cpcBidCeiling < c.avgCpc) {
+    if (surveyConvImported && c.status === 'ENABLED' && c.cpcBidCeiling && c.avgCpc && c.cpcBidCeiling < c.avgCpc) {
       recs.push({
         type: 'raise_cpc_ceiling',
         priority: 'high',
@@ -136,8 +140,7 @@ export async function recommend(env, tenant, cid) {
       flag(4, 'medium', `informational keyword "${k.keyword}"`, 'move to the C0 article campaign (≤£0.15) or organic'));
     // Row 19 — flying blind until survey_start / health_index_complete are imported as Ads conversions.
     // Checked against the actual conversion actions, not a click/conv count (a stray purchase must not mask it).
-    const hasSurveyConv = convActions.some((c) => /health_index_complete|survey_start/i.test(c.name || ''));
-    if (!hasSurveyConv)
+    if (!surveyConvImported)
       flag(19, 'critical', `survey_start / health_index_complete not imported to Ads (present: ${convActions.map((c) => c.name).join(', ') || 'none'})`, 'mark them GA4 key events and import; do not scale until survey starts are visible');
     doctrine.sort((a, b) => ({ critical: 0, high: 1, medium: 2 }[a.severity] - { critical: 0, high: 1, medium: 2 }[b.severity]));
   }
