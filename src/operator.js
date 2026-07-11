@@ -70,9 +70,11 @@ export async function recommend(env, tenant, cid) {
     }));
 
   // Rule 2 — weak RSAs (Ad Strength): aim for 8+ headlines and 4 descriptions.
+  // Only responsive SEARCH ads have this shape; skip video/other ad types (no search headlines),
+  // which have h===0 && d===0 and would otherwise be falsely flagged as "0/15 headlines".
   adList.forEach((a) => {
     const h = (a.headlines || []).length, d = (a.descriptions || []).length;
-    if (h < 8 || d < 3) recs.push({
+    if ((h > 0 || d > 0) && (h < 8 || d < 3)) recs.push({
       type: 'strengthen_rsa',
       priority: 'medium',
       target: `${a.campaign} / ${a.adGroup}`,
