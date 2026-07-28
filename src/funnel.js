@@ -34,6 +34,54 @@ async function row(db, sql, ...params) {
   }
 }
 
+export function paymentStages(p = {}, testSucceeded = {}) {
+  const n = (value) => Number(value || 0);
+  return {
+    checkout_starts: {
+      attempts: n(p.attempts),
+      distinct_people: n(p.distinct_people),
+      last7d: n(p.attempts_7d),
+      last30d: n(p.attempts_30d),
+      incomplete_attempts: n(p.incomplete_attempts),
+      incomplete_people: n(p.incomplete_people),
+      incomplete_7d: n(p.incomplete_7d),
+      incomplete_30d: n(p.incomplete_30d),
+      note: 'live Stripe checkout attempts; incomplete intents shown separately',
+      _error: p._error,
+    },
+    buyers: {
+      total: n(p.buyers),
+      last7d: n(p.buyers_7d),
+      last30d: n(p.buyers_30d),
+      gross_revenue_gbp: n(p.buyer_gross_gbp_pence) / 100,
+      revenue_gbp: n(p.buyer_net_gbp_pence) / 100,
+      revenue_7d_gbp: n(p.buyer_net_7d_gbp_pence) / 100,
+      revenue_30d_gbp: n(p.buyer_net_30d_gbp_pence) / 100,
+      note: 'Health-Index-linked new funnel buyers; ad source is not inferred',
+      _error: p._error,
+    },
+    refunds: {
+      total: n(p.refunds),
+      last7d: n(p.refunds_7d),
+      last30d: n(p.refunds_30d),
+      amount_gbp: n(p.refunded_gbp_pence) / 100,
+      amount_7d_gbp: n(p.refunded_7d_gbp_pence) / 100,
+      amount_30d_gbp: n(p.refunded_30d_gbp_pence) / 100,
+      note: 'Stripe refunds; refunded value is excluded from buyer revenue',
+      _error: p._error,
+    },
+    payment_exclusions: {
+      operator_tests: n(p.operator_tests),
+      existing_customers: n(p.existing_customers),
+      off_funnel: n(p.off_funnel),
+      total: n(p.operator_tests) + n(p.existing_customers) + n(p.off_funnel),
+      test_mode_succeeded: n(testSucceeded.total),
+      note: 'successful payments retained in the ledger but excluded from new funnel buyers',
+      _error: p._error || testSucceeded._error,
+    },
+  };
+}
+
 export async function funnel(env, tenant) {
   if (tenant !== 'dreambody.club') return { ok: false, reason: 'only dreambody.club instrumented' };
   const out = { ok: true, tenant, benchmarks: BENCHMARKS, stages: {}, gaps: [] };
@@ -50,46 +98,91 @@ export async function funnel(env, tenant) {
   }
 
   // ── Checkouts + buyers (payments D1) ──
-  // `stripe_mode` is the authoritative test/live boundary. Do not infer a test payment from
-  // its email address or date: those heuristics suppressed genuine live Stripe sales.
-  // purchased_at is authoritative because created_at is nullable in the live schema.
+  // `stripe_mode` is payment-environment truth, not attribution truth. The live exclusions
+  // registry separates operator tests / known existing customers from new funnel buyers.
+  // A non-empty Health Index token is required for funnel eligibility. Refunds and incomplete
+  // intents remain visible as their own outcomes. purchased_at is authoritative because
+  // created_at is nullable in the live schema.
   if (env.DB_PAYMENTS) {
-    const co = await row(env.DB_PAYMENTS,
-      "SELECT COUNT(DISTINCT email) started_distinct, " +
-      "COUNT(DISTINCT CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN email END) started_7d, " +
-      "COUNT(DISTINCT CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN email END) started_30d " +
-      "FROM payments WHERE tenant_id=? AND stripe_mode='live'",
-      DBC_PAYMENT_TENANT);
-    const b = await row(env.DB_PAYMENTS,
-      "SELECT COUNT(*) total, " +
-      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN 1 ELSE 0 END) d7, " +
-      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN 1 ELSE 0 END) d30, " +
-      "SUM(price_amount) rev_pence, " +
-      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN price_amount ELSE 0 END) rev_7d_pence, " +
-      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN price_amount ELSE 0 END) rev_30d_pence " +
-      "FROM payments WHERE tenant_id=? AND stripe_mode='live' AND status='succeeded'",
+    const p = await row(env.DB_PAYMENTS, `
+      WITH classified AS (
+        SELECT p.*,
+          COALESCE(p.refunded_amount, 0) AS refund_minor,
+          CASE
+            WHEN EXISTS (
+              SELECT 1 FROM payment_attribution_exclusions e
+              WHERE e.tenant_id=p.tenant_id AND e.active=1 AND e.reason='operator_test'
+                AND (
+                  (e.subject_type='email_like' AND lower(p.email) LIKE lower(e.subject_value))
+                  OR (e.subject_type='stripe_customer_id' AND p.stripe_customer_id=e.subject_value)
+                )
+            ) THEN 'operator_test'
+            WHEN EXISTS (
+              SELECT 1 FROM payment_attribution_exclusions e
+              WHERE e.tenant_id=p.tenant_id AND e.active=1 AND e.reason='existing_customer'
+                AND (
+                  (e.subject_type='email_like' AND lower(p.email) LIKE lower(e.subject_value))
+                  OR (e.subject_type='stripe_customer_id' AND p.stripe_customer_id=e.subject_value)
+                )
+            ) THEN 'existing_customer'
+            WHEN trim(COALESCE(p.token,''))='' THEN 'off_funnel'
+            ELSE NULL
+          END AS exclusion_reason,
+          COALESCE(
+            NULLIF(lower(trim(p.email)), ''),
+            NULLIF(trim(p.token), ''),
+            p.stripe_session_id
+          ) AS person_key
+        FROM payments p
+        WHERE p.tenant_id=? AND p.stripe_mode='live'
+      )
+      SELECT
+        COUNT(*) AS attempts,
+        COUNT(DISTINCT person_key) AS distinct_people,
+        SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN 1 ELSE 0 END) AS attempts_7d,
+        SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN 1 ELSE 0 END) AS attempts_30d,
+        SUM(CASE WHEN status NOT IN ('succeeded','partially_refunded','refunded','canceled') THEN 1 ELSE 0 END) AS incomplete_attempts,
+        COUNT(DISTINCT CASE WHEN status NOT IN ('succeeded','partially_refunded','refunded','canceled') THEN person_key END) AS incomplete_people,
+        SUM(CASE WHEN status NOT IN ('succeeded','partially_refunded','refunded','canceled')
+          AND datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN 1 ELSE 0 END) AS incomplete_7d,
+        SUM(CASE WHEN status NOT IN ('succeeded','partially_refunded','refunded','canceled')
+          AND datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN 1 ELSE 0 END) AS incomplete_30d,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL THEN 1 ELSE 0 END) AS buyers,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL
+          AND datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN 1 ELSE 0 END) AS buyers_7d,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL
+          AND datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN 1 ELSE 0 END) AS buyers_30d,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL
+          AND lower(currency)='gbp' THEN price_amount ELSE 0 END) AS buyer_gross_gbp_pence,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL
+          AND lower(currency)='gbp' THEN price_amount-refund_minor ELSE 0 END) AS buyer_net_gbp_pence,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL
+          AND lower(currency)='gbp'
+          AND datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days')
+          THEN price_amount-refund_minor ELSE 0 END) AS buyer_net_7d_gbp_pence,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason IS NULL
+          AND lower(currency)='gbp'
+          AND datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days')
+          THEN price_amount-refund_minor ELSE 0 END) AS buyer_net_30d_gbp_pence,
+        SUM(CASE WHEN refund_minor>0 THEN 1 ELSE 0 END) AS refunds,
+        SUM(CASE WHEN refund_minor>0
+          AND datetime(refunded_at)>datetime('now','-7 days') THEN 1 ELSE 0 END) AS refunds_7d,
+        SUM(CASE WHEN refund_minor>0
+          AND datetime(refunded_at)>datetime('now','-30 days') THEN 1 ELSE 0 END) AS refunds_30d,
+        SUM(CASE WHEN refund_minor>0 AND lower(currency)='gbp' THEN refund_minor ELSE 0 END) AS refunded_gbp_pence,
+        SUM(CASE WHEN refund_minor>0 AND lower(currency)='gbp'
+          AND datetime(refunded_at)>datetime('now','-7 days') THEN refund_minor ELSE 0 END) AS refunded_7d_gbp_pence,
+        SUM(CASE WHEN refund_minor>0 AND lower(currency)='gbp'
+          AND datetime(refunded_at)>datetime('now','-30 days') THEN refund_minor ELSE 0 END) AS refunded_30d_gbp_pence,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason='operator_test' THEN 1 ELSE 0 END) AS operator_tests,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason='existing_customer' THEN 1 ELSE 0 END) AS existing_customers,
+        SUM(CASE WHEN status IN ('succeeded','partially_refunded') AND exclusion_reason='off_funnel' THEN 1 ELSE 0 END) AS off_funnel
+      FROM classified`,
       DBC_PAYMENT_TENANT);
     const testSucceeded = await row(env.DB_PAYMENTS,
       "SELECT COUNT(*) total FROM payments WHERE tenant_id=? AND stripe_mode='test' AND status='succeeded'",
       DBC_PAYMENT_TENANT);
-    out.stages.checkout_starts = {
-      distinct_people: co.started_distinct,
-      last7d: co.started_7d,
-      last30d: co.started_30d,
-      note: 'live Stripe checkouts; test mode excluded',
-      _error: co._error,
-    };
-    out.stages.buyers = {
-      total: b.total || 0,
-      last7d: b.d7 || 0,
-      last30d: b.d30 || 0,
-      revenue_gbp: (b.rev_pence || 0) / 100,
-      revenue_7d_gbp: (b.rev_7d_pence || 0) / 100,
-      revenue_30d_gbp: (b.rev_30d_pence || 0) / 100,
-      test_succeeded_excluded: testSucceeded.total || 0,
-      note: 'live Stripe succeeded payments; test mode excluded',
-      _error: b._error,
-    };
+    Object.assign(out.stages, paymentStages(p, testSucceeded));
   }
 
   // ── Paid engagement (Google Ads, 7d) ──
