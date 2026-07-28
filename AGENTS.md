@@ -23,6 +23,9 @@ GA4 Measurement Protocol credentials are query parameters (not JSON fields); `/m
 validates the payload, reads GA4 key events + Google Ads links, and exposes current event counts.
 
 Server-side purchase: stripe-payments webhook posts to /purchase after successful payment record.
+When checkout has consented Google-tag identifiers, `/purchase` uses the supplied GA client id and
+numeric session id so Measurement Protocol can join the server-side purchase to the originating
+tagged session. Without them the event remains an unattributed GA4 purchase; Stripe is revenue truth.
 
 Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 

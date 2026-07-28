@@ -266,7 +266,7 @@ async function handleServerPurchase(req, env) {
     return new Response('Invalid JSON', { status: 400 });
   }
 
-  const { tenant_id, email, price_amount, currency, session_id, token } = body;
+  const { tenant_id, email, price_amount, currency, client_id, session_id, token } = body;
 
   if (!tenant_id || !email || !price_amount || !currency) {
     return new Response(
@@ -291,7 +291,7 @@ async function handleServerPurchase(req, env) {
     params,
   };
 
-  const success = await forwardToGA4(gaEvent, env, session_id || token);
+  const success = await forwardToGA4(gaEvent, env, client_id || session_id || token);
 
   return new Response(JSON.stringify({ success }), {
     status: success ? 200 : 502,
