@@ -45,11 +45,15 @@ export async function recommend(env, tenant, cid) {
   const searchTerms = terms.searchTerms || [];
   const keywords = kw.keywords || [];
   const convActions = conv.conversions || [];
-  // Are the survey conversions (survey_start / health_index_complete) imported to Ads? While they
-  // are not, we are flying blind (doctrine row 19) and must NOT recommend raising bids (row 12/13).
-  // Matches the lead conversion action however it is named: "Health Index lead" (the one created
-  // for the offline gclid upload), health_index_complete, or survey_start.
-  const surveyConvImported = convActions.some((c) => /health.?index|survey.?start/i.test(c.name || ''));
+  // Only the linked GA4 health_index_complete action satisfies the lead-measurement gate. The old
+  // UPLOAD_CLICKS action named "Health Index lead" is unsupported for this online completion and
+  // must not make the operator believe attribution is ready.
+  const leadConvImported = convActions.some((c) =>
+    c.type === 'GOOGLE_ANALYTICS_4_CUSTOM' &&
+    c.ga4EventName === 'health_index_complete' &&
+    c.status === 'ENABLED' &&
+    c.primaryForGoal === true
+  );
   const adList = (ads.ads || []).filter((a) => a.status !== 'REMOVED');
   const nameToId = {};
   campaigns.forEach((c) => { if (c.name) nameToId[c.name] = c.id; });
@@ -91,10 +95,10 @@ export async function recommend(env, tenant, cid) {
   const conv30 = campaigns.reduce((s, c) => s + (c.conversions || 0), 0);
 
   // Rule 3 — CPC bid ceiling choking delivery: a max-CPC cap well below the market average CPC
-  // means bids rarely win the auction. BUT never recommend raising bids while blind on survey
-  // conversions (doctrine rows 12/19) — cheap delivery is the point until leads are visible.
+  // means bids rarely win the auction. BUT never recommend raising bids while blind on completed
+  // Health Index leads (doctrine rows 12/19) — cheap delivery is the point until leads are visible.
   campaigns.forEach((c) => {
-    if (surveyConvImported && c.status === 'ENABLED' && c.cpcBidCeiling && c.avgCpc && c.cpcBidCeiling < c.avgCpc) {
+    if (leadConvImported && c.status === 'ENABLED' && c.cpcBidCeiling && c.avgCpc && c.cpcBidCeiling < c.avgCpc) {
       recs.push({
         type: 'raise_cpc_ceiling',
         priority: 'high',
@@ -127,9 +131,9 @@ export async function recommend(env, tenant, cid) {
     const INFORMATIONAL = /^\s*(как|сколько|что|почему|зачем)\b|влияет ли/i;
     const flag = (row, severity, detail, fix) => doctrine.push({ row, severity, detail, fix });
 
-    // Row 12 — max CPC must stay £0.15 until survey_start is visible in Ads.
+    // Row 12 — max CPC must stay £0.15 until completed Health Index leads are visible in Ads.
     campaigns.filter((c) => c.cpcBidCeiling && c.cpcBidCeiling > 0.15).forEach((c) =>
-      flag(12, 'high', `${c.name}: max CPC £${c.cpcBidCeiling.toFixed(2)} exceeds the held £0.15`, 'revert to £0.15 unless Christopher raised it after survey_start is visible'));
+      flag(12, 'high', `${c.name}: max CPC £${c.cpcBidCeiling.toFixed(2)} exceeds the held £0.15`, 'revert to £0.15 unless Christopher raised it after completed leads became visible'));
     // Row 13 — never Maximize Clicks uncapped.
     campaigns.filter((c) => c.biddingStrategy === 'TARGET_SPEND' && !c.cpcBidCeiling).forEach((c) =>
       flag(13, 'critical', `${c.name}: Maximize Clicks with no CPC ceiling`, 'set a max CPC bid limit immediately'));
@@ -142,10 +146,10 @@ export async function recommend(env, tenant, cid) {
     // Row 4 — informational queries belong to the article campaign, not main.
     keywords.filter((k) => INFORMATIONAL.test(k.keyword || '')).forEach((k) =>
       flag(4, 'medium', `informational keyword "${k.keyword}"`, 'move to the C0 article campaign (≤£0.15) or organic'));
-    // Row 19 — flying blind until survey_start / health_index_complete are imported as Ads conversions.
+    // Row 19 — flying blind until health_index_complete is imported as a primary Ads conversion.
     // Checked against the actual conversion actions, not a click/conv count (a stray purchase must not mask it).
-    if (!surveyConvImported)
-      flag(19, 'critical', `survey_start / health_index_complete not imported to Ads (present: ${convActions.map((c) => c.name).join(', ') || 'none'})`, 'mark them GA4 key events and import; do not scale until survey starts are visible');
+    if (!leadConvImported)
+      flag(19, 'critical', `health_index_complete is not an enabled primary GA4 conversion in Ads (present: ${convActions.map((c) => c.name).join(', ') || 'none'})`, 'import the GA4 key event; do not scale until completed leads are visible');
     doctrine.sort((a, b) => ({ critical: 0, high: 1, medium: 2 }[a.severity] - { critical: 0, high: 1, medium: 2 }[b.severity]));
   }
 

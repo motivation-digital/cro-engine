@@ -21,12 +21,12 @@ function pemToPkcs8(pem) {
   return buf.buffer;
 }
 
-async function getAccessToken(sa) {
+async function getAccessToken(sa, scope = 'https://www.googleapis.com/auth/analytics.readonly') {
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'RS256', typ: 'JWT' };
   const claim = {
     iss: sa.client_email,
-    scope: 'https://www.googleapis.com/auth/analytics.readonly',
+    scope,
     aud: 'https://oauth2.googleapis.com/token',
     iat: now,
     exp: now + 3600,
@@ -48,6 +48,63 @@ async function getAccessToken(sa) {
   });
   if (!res.ok) throw new Error('token ' + res.status + ' ' + (await res.text()).slice(0, 200));
   return (await res.json()).access_token;
+}
+
+async function adminRequest(sa, path, options = {}, scope = 'https://www.googleapis.com/auth/analytics.readonly') {
+  const token = await getAccessToken(sa, scope);
+  const res = await fetch('https://analyticsadmin.googleapis.com/v1alpha/' + path, {
+    ...options,
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw new Error('analyticsAdmin ' + res.status + ' ' + text.slice(0, 300));
+  return data;
+}
+
+export async function measurementConfig(sa, propertyId) {
+  const [keyData, linkData] = await Promise.all([
+    adminRequest(sa, 'properties/' + propertyId + '/keyEvents?pageSize=200'),
+    adminRequest(sa, 'properties/' + propertyId + '/googleAdsLinks?pageSize=200'),
+  ]);
+  return {
+    propertyId: String(propertyId),
+    keyEvents: (keyData.keyEvents || []).map((k) => ({
+      name: k.name,
+      eventName: k.eventName,
+      countingMethod: k.countingMethod,
+      defaultValue: k.defaultValue || null,
+    })),
+    googleAdsLinks: (linkData.googleAdsLinks || []).map((l) => ({
+      name: l.name,
+      customerId: l.customerId,
+      adsPersonalizationEnabled: l.adsPersonalizationEnabled,
+    })),
+  };
+}
+
+export async function ensureKeyEvent(sa, propertyId, eventName) {
+  const before = await measurementConfig(sa, propertyId);
+  const existing = before.keyEvents.find((k) => k.eventName === eventName);
+  if (existing) return { created: false, keyEvent: existing, config: before };
+
+  const created = await adminRequest(
+    sa,
+    'properties/' + propertyId + '/keyEvents',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        eventName,
+        countingMethod: 'ONCE_PER_SESSION',
+      }),
+    },
+    'https://www.googleapis.com/auth/analytics.edit'
+  );
+  return { created: true, keyEvent: created, config: await measurementConfig(sa, propertyId) };
 }
 
 // Returns { eventName: count } over the last `days` days for the property.
