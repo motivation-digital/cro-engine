@@ -97,24 +97,42 @@ async function measurementStatus(env, tenant) {
   const cfg = TENANTS[tenant];
   if (!cfg) return { ok: false, reason: 'unknown_tenant' };
   const sa = await ga4ServiceAccount(env);
-  const [config, counts7d, counts30d, validation] = await Promise.all([
+  const settled = await Promise.allSettled([
     measurementConfig(sa, cfg.ga4_property),
     eventCounts(sa, cfg.ga4_property, 7),
     eventCounts(sa, cfg.ga4_property, 30),
     validateGA4(env, 'health_index_complete'),
   ]);
+  const errors = {};
+  const labels = ['config', 'counts7d', 'counts30d', 'validation'];
+  settled.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      errors[labels[index]] = String(result.reason?.message || result.reason).slice(0, 500);
+    }
+  });
+  const config = settled[0].status === 'fulfilled'
+    ? settled[0].value
+    : { keyEvents: [], googleAdsLinks: [] };
+  const counts7d = settled[1].status === 'fulfilled' ? settled[1].value : {};
+  const counts30d = settled[2].status === 'fulfilled' ? settled[2].value : {};
+  const validation = settled[3].status === 'fulfilled'
+    ? settled[3].value
+    : { validationMessages: [] };
   const keyEvent = config.keyEvents.find((k) => k.eventName === 'health_index_complete') || null;
   const adsLink = config.googleAdsLinks.find((l) => String(l.customerId) === '5740015733') || null;
   return {
-    ok: true,
+    ok: !Object.keys(errors).length,
     tenant,
     propertyId: cfg.ga4_property,
     measurementId: env.GA4_MEASUREMENT_ID,
+    errors,
     healthIndex: {
       keyEvent,
+      keyEventVerified: !errors.config,
       eventCount7d: counts7d.health_index_complete || 0,
       eventCount30d: counts30d.health_index_complete || 0,
-      payloadValid: !(validation.validationMessages || []).length,
+      countsVerified: !errors.counts7d && !errors.counts30d,
+      payloadValid: !errors.validation && !(validation.validationMessages || []).length,
       validationMessages: validation.validationMessages || [],
     },
     purchase: {
@@ -123,12 +141,16 @@ async function measurementStatus(env, tenant) {
     },
     googleAds: {
       linked: !!adsLink,
+      linkVerified: !errors.config,
       link: adsLink,
     },
     requirements: [
-      ...(!keyEvent ? ['Create health_index_complete as a GA4 key event'] : []),
-      ...(!adsLink ? ['Link GA4 property ' + cfg.ga4_property + ' to Google Ads 5740015733'] : []),
+      ...(errors.config ? ['Restore GA4 Admin API read/setup access'] : []),
+      ...(!errors.config && !keyEvent ? ['Create health_index_complete as a GA4 key event'] : []),
+      ...(!errors.config && !adsLink ? ['Link GA4 property ' + cfg.ga4_property + ' to Google Ads 5740015733'] : []),
+      ...(errors.counts7d || errors.counts30d ? ['Restore GA4 Data API reporting access'] : []),
       ...((validation.validationMessages || []).length ? ['Correct the GA4 Measurement Protocol payload'] : []),
+      ...(errors.validation ? ['Restore GA4 Measurement Protocol validation access'] : []),
     ],
   };
 }
@@ -139,8 +161,17 @@ async function setupMeasurement(req, env, tenant) {
   const cfg = TENANTS[tenant];
   if (!cfg) return json({ error: 'unknown_tenant' }, 404);
   const sa = await ga4ServiceAccount(env);
-  const keyEvent = await ensureKeyEvent(sa, cfg.ga4_property, 'health_index_complete');
-  return json({ ok: true, keyEvent, status: await measurementStatus(env, tenant) });
+  try {
+    const keyEvent = await ensureKeyEvent(sa, cfg.ga4_property, 'health_index_complete');
+    return json({ ok: true, keyEvent, status: await measurementStatus(env, tenant) });
+  } catch (error) {
+    return json({
+      ok: false,
+      error: 'key_event_setup_failed',
+      detail: String(error?.message || error).slice(0, 500),
+      status: await measurementStatus(env, tenant),
+    }, 502);
+  }
 }
 
 // ─── Consent check ───────────────────────────
