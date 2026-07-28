@@ -21,6 +21,9 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Test
+        run: npm test
+
       - name: Bundle worker with esbuild
         run: |
           npx --yes esbuild@latest src/worker.js \
