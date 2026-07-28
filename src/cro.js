@@ -8,7 +8,7 @@ const WINDOW_DAYS = 28;
 
 // Tenant registry (tenant-zero). Mirrors brands/{tenant}/convert-profile.md in the lifecycle repo.
 // DBC funnel = the events actually instrumented (AGI-9000590):
-//   page_view (Tag Gateway) -> health_index_complete (Typeform webhook) -> begin_checkout
+//   page_view (Tag Gateway) -> health_index_complete (dbc-index result delivery) -> begin_checkout
 //   (stripe-payments) -> purchase (stripe-payments) -> member_activate (auth, pending).
 // health_index_start is intentionally omitted (intra-quiz drop-off is a Typeform Business feature).
 export const TENANTS = {

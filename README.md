@@ -8,7 +8,8 @@ Part of the CRO Framework (AGI-9000326).
 
 - **Front-end events** (`/events`): thin first-party signal (event name + params) from pages
 - **Server-side purchase** (`/purchase`): fired by stripe-payments after successful payment record
-- **GA4 Measurement Protocol**: direct API call to Google's servers (no client-side gtag)
+- **GA4 Measurement Protocol**: direct API call to Google's EU endpoint, using the visitor's GA
+  client ID when available so linked Google Ads can attribute the event
 
 Multi-tenant: brand key resolved from `sites.clients.id`.
 
@@ -35,10 +36,12 @@ GitHub Actions deploys via Cloudflare API (direct CF API, NOT wrangler).
 
 ## Endpoints
 
-- `POST /events` — Frontend event ingest
+- `POST /events` — Frontend event ingest (`client_id` preserves browser/ad attribution)
 - `POST /purchase` — Server-side purchase (from stripe-payments)
 - `GET /funnel/:tenant` — Funnel KPIs; completed Health Index records are leads and
   buyers/revenue come from succeeded live-mode Stripe payments (test mode excluded)
+- `GET /measurement/:tenant` — GA4 payload, key-event, Ads-link and event-count readiness
+- `POST /measurement/:tenant` — Admin-key-gated, idempotent Health Index key-event setup
 - `GET /health` — Binding status
 
 ## References
@@ -47,4 +50,5 @@ GitHub Actions deploys via Cloudflare API (direct CF API, NOT wrangler).
 - Perf gate: AGI-9000298 (Rule 37)
 - Consent: AGI-9000074 / AGI-9000260 / AGI-9000131
 - Runbook: CRO Framework doc (Instrument a tenant + Conversion event taxonomy)
-- Event vocabulary: page_view, health_index_start, health_index_complete, begin_checkout, purchase, member_activate
+- Event vocabulary: page_view, health_index_start, health_index_complete, health_index_complete_server
+  (unattributed webhook diagnostic), begin_checkout, purchase, member_activate

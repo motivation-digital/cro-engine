@@ -7,12 +7,34 @@ import { getTenant } from './tenants.js';
 import { runCro, readReport, TENANTS } from './cro.js';
 import { recommend } from './operator.js';
 import { funnel } from './funnel.js';
+import { ensureKeyEvent, eventCounts, measurementConfig } from './ga4.js';
 
 // ─── GA4 Measurement Protocol ──────────────────────
 
-// clientId: GA4 MP drops events without a client_id. Callers pass a stable id (e.g. a Typeform
-// token or Stripe session) so related events attribute together; otherwise a random id is used
-// so the event still lands.
+function hashId(value) {
+  let hash = 2166136261;
+  for (const ch of String(value || '')) {
+    hash ^= ch.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return String((hash >>> 0) || 1);
+}
+
+function gaClientId(value) {
+  const raw = String(value || '');
+  const cookie = raw.match(/(?:GA\d+\.\d+\.)?(\d+\.\d+)$/);
+  if (cookie) return cookie[1];
+  const seed = raw || crypto.randomUUID();
+  return hashId(seed) + '.' + hashId(seed + ':ga4');
+}
+
+function gaSessionId(value) {
+  const raw = String(value || '');
+  return /^\d+$/.test(raw) && Number(raw) > 0 ? Number(raw) : null;
+}
+
+// Measurement Protocol accepts credentials in the request URL, not the JSON payload. A 2xx from
+// /mp/collect only means Google received the request, so setup also uses the validation endpoint.
 async function forwardToGA4(event, env, clientId) {
   if (!env.GA4_MEASUREMENT_ID) {
     console.warn('GA4_MEASUREMENT_ID not set');
@@ -25,15 +47,13 @@ async function forwardToGA4(event, env, clientId) {
     return;
   }
 
-  const payload = {
-    measurement_id: env.GA4_MEASUREMENT_ID,
-    api_secret: secret,
-    client_id: clientId || crypto.randomUUID(),
-    events: [event],
-  };
+  const payload = { client_id: gaClientId(clientId), events: [event] };
+  const query =
+    '?measurement_id=' + encodeURIComponent(env.GA4_MEASUREMENT_ID) +
+    '&api_secret=' + encodeURIComponent(secret);
 
   try {
-    const response = await fetch('https://www.google-analytics.com/mp/collect', {
+    const response = await fetch('https://region1.google-analytics.com/mp/collect' + query, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -48,6 +68,79 @@ async function forwardToGA4(event, env, clientId) {
     console.error('GA4 forward error:', error.message);
     return false;
   }
+}
+
+async function validateGA4(env, eventName) {
+  const secret = await env.GA4_API_SECRET.get();
+  const query =
+    '?measurement_id=' + encodeURIComponent(env.GA4_MEASUREMENT_ID) +
+    '&api_secret=' + encodeURIComponent(secret);
+  const res = await fetch('https://region1.google-analytics.com/debug/mp/collect' + query, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: '9000575.9000575',
+      validation_behavior: 'ENFORCE_RECOMMENDATIONS',
+      events: [{ name: eventName, params: { engagement_time_msec: 100 } }],
+    }),
+  });
+  if (!res.ok) throw new Error('GA4 validation ' + res.status + ' ' + (await res.text()).slice(0, 200));
+  return res.json();
+}
+
+async function ga4ServiceAccount(env) {
+  const raw = typeof env.GA4_SA === 'string' ? env.GA4_SA : await env.GA4_SA.get();
+  return JSON.parse(raw);
+}
+
+async function measurementStatus(env, tenant) {
+  const cfg = TENANTS[tenant];
+  if (!cfg) return { ok: false, reason: 'unknown_tenant' };
+  const sa = await ga4ServiceAccount(env);
+  const [config, counts7d, counts30d, validation] = await Promise.all([
+    measurementConfig(sa, cfg.ga4_property),
+    eventCounts(sa, cfg.ga4_property, 7),
+    eventCounts(sa, cfg.ga4_property, 30),
+    validateGA4(env, 'health_index_complete'),
+  ]);
+  const keyEvent = config.keyEvents.find((k) => k.eventName === 'health_index_complete') || null;
+  const adsLink = config.googleAdsLinks.find((l) => String(l.customerId) === '5740015733') || null;
+  return {
+    ok: true,
+    tenant,
+    propertyId: cfg.ga4_property,
+    measurementId: env.GA4_MEASUREMENT_ID,
+    healthIndex: {
+      keyEvent,
+      eventCount7d: counts7d.health_index_complete || 0,
+      eventCount30d: counts30d.health_index_complete || 0,
+      payloadValid: !(validation.validationMessages || []).length,
+      validationMessages: validation.validationMessages || [],
+    },
+    purchase: {
+      eventCount7d: counts7d.purchase || 0,
+      eventCount30d: counts30d.purchase || 0,
+    },
+    googleAds: {
+      linked: !!adsLink,
+      link: adsLink,
+    },
+    requirements: [
+      ...(!keyEvent ? ['Create health_index_complete as a GA4 key event'] : []),
+      ...(!adsLink ? ['Link GA4 property ' + cfg.ga4_property + ' to Google Ads 5740015733'] : []),
+      ...((validation.validationMessages || []).length ? ['Correct the GA4 Measurement Protocol payload'] : []),
+    ],
+  };
+}
+
+async function setupMeasurement(req, env, tenant) {
+  const key = await env.GADS_ADMIN_KEY.get();
+  if (!key || req.headers.get('x-admin-key') !== key) return json({ error: 'unauthorized' }, 401);
+  const cfg = TENANTS[tenant];
+  if (!cfg) return json({ error: 'unknown_tenant' }, 404);
+  const sa = await ga4ServiceAccount(env);
+  const keyEvent = await ensureKeyEvent(sa, cfg.ga4_property, 'health_index_complete');
+  return json({ ok: true, keyEvent, status: await measurementStatus(env, tenant) });
 }
 
 // ─── Consent check ───────────────────────────
@@ -91,7 +184,7 @@ async function handleFrontendEvent(req, env) {
     return new Response('Invalid JSON', { status: 400 });
   }
 
-  const { tenant_id, session_id, user_id, event_name, event_params } = body;
+  const { tenant_id, client_id, session_id, user_id, event_name, event_params } = body;
 
   if (!tenant_id || !event_name) {
     return new Response(JSON.stringify({ error: 'tenant_id and event_name required' }), {
@@ -108,20 +201,19 @@ async function handleFrontendEvent(req, env) {
     });
   }
 
-  const gaEvent = {
-    name: event_name,
-    params: {
-      session_id: session_id || '',
-      engagement_time_msec: String(event_params?.engagement_time_msec || 100),
-      ...(event_params || {}),
-    },
+  const params = {
+    ...(event_params || {}),
+    engagement_time_msec: Number(event_params?.engagement_time_msec || 100),
   };
+  const numericSessionId = gaSessionId(session_id);
+  if (numericSessionId) params.session_id = numericSessionId;
+  const gaEvent = { name: event_name, params };
 
   if (user_id) {
     gaEvent.user_id = user_id;
   }
 
-  const success = await forwardToGA4(gaEvent, env, session_id || user_id);
+  const success = await forwardToGA4(gaEvent, env, client_id || user_id || session_id);
 
   return new Response(JSON.stringify({ success }), {
     status: success ? 200 : 502,
@@ -154,16 +246,18 @@ async function handleServerPurchase(req, env) {
 
   const valueInMajorUnits = price_amount / 100;
 
+  const params = {
+    transaction_id: token || `stripe-${Date.now()}`,
+    affiliation: tenant_id,
+    value: Number(valueInMajorUnits),
+    currency: currency.toUpperCase(),
+    engagement_time_msec: 100,
+  };
+  const numericSessionId = gaSessionId(session_id);
+  if (numericSessionId) params.session_id = numericSessionId;
   const gaEvent = {
     name: 'purchase',
-    params: {
-      transaction_id: token || `stripe-${Date.now()}`,
-      affiliation: tenant_id,
-      value: String(valueInMajorUnits),
-      currency: currency.toUpperCase(),
-      session_id: session_id || '',
-      engagement_time_msec: String(100),
-    },
+    params,
   };
 
   const success = await forwardToGA4(gaEvent, env, session_id || token);
@@ -174,11 +268,11 @@ async function handleServerPurchase(req, env) {
   });
 }
 
-// ─── Typeform webhook (health_index_complete) ────────────────────
+// ─── Typeform webhook (completion diagnostic) ────────────────────
 // The DBC health-index quiz is a Typeform popup (form nwPP4TfP). Typeform Plus keeps webhooks
-// (the native GA4 connector is gated behind Business) — so on submit Typeform POSTs here and we
-// forward a health_index_complete conversion to GA4 server-side. Reliable (fires even if the tab
-// closes), no client JS, no CSP change, no plan upgrade.
+// (the native GA4 connector is gated behind Business). This webhook is a reliable server-side
+// completion diagnostic, but it cannot carry the visitor's GA identity. The primary attributed
+// health_index_complete lead is emitted once by dbc-index when the results data is read.
 // Signature: if TYPEFORM_WEBHOOK_SECRET is bound, verify the `Typeform-Signature` header
 // (sha256=base64(HMAC-SHA256(secret, rawBody))); if unset, accept (turn on verification later).
 
@@ -221,11 +315,10 @@ async function handleTypeform(req, env) {
   const fr = (body && body.form_response) || {};
   const clientId = fr.token || crypto.randomUUID();
   const gaEvent = {
-    name: 'health_index_complete',
+    name: 'health_index_complete_server',
     params: {
       form_id: fr.form_id || '',
-      session_id: fr.token || '',
-      engagement_time_msec: String(100),
+      engagement_time_msec: 100,
     },
   };
 
@@ -284,6 +377,14 @@ export default {
 
       if (path === '/health') {
         return await handleHealth(env);
+      }
+
+      const measurement = path.match(/^\/measurement\/([^/]+)$/);
+      if (measurement) {
+        const tenant = decodeURIComponent(measurement[1]);
+        if (req.method === 'GET') return json(await measurementStatus(env, tenant));
+        if (req.method === 'POST') return setupMeasurement(req, env, tenant);
+        return new Response('Method not allowed', { status: 405 });
       }
 
       // Funnel KPIs (read-only): /funnel/:tenant (GET) — one front-to-back view from every source.

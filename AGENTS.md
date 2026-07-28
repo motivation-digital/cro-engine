@@ -19,6 +19,8 @@ Live on workers.dev. /health endpoint returns binding status.
 GA4 secret (cro-engine-dbc in Cloudflare Secrets Store) provisioned. Binding wired via deploy.yml metadata (Rule 28).
 
 Front-end events: thin first-party signal flow from pages → cro-engine /events → GA4.
+GA4 Measurement Protocol credentials are query parameters (not JSON fields); `/measurement/:tenant`
+validates the payload, reads GA4 key events + Google Ads links, and exposes current event counts.
 
 Server-side purchase: stripe-payments webhook posts to /purchase after successful payment record.
 
@@ -32,6 +34,8 @@ Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 | POST | /purchase | Server-side purchase (from stripe-payments) | Internal |
 | GET | /health | Binding status check | None |
 | GET | /funnel/:tenant | Funnel KPIs; Health Index completions are leads and buyers are live-mode succeeded Stripe payments | None |
+| GET | /measurement/:tenant | GA4 payload validation, key-event/link state, and 7/30-day lead/purchase event counts | None |
+| POST | /measurement/:tenant | Idempotently create `health_index_complete` as a once-per-session GA4 key event | X-Admin-Key |
 
 ## D1 bindings
 
