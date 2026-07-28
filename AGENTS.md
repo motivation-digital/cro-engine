@@ -31,6 +31,7 @@ Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 | POST | /events | Frontend event ingest | CORS-gated (consent pending) |
 | POST | /purchase | Server-side purchase (from stripe-payments) | Internal |
 | GET | /health | Binding status check | None |
+| GET | /funnel/:tenant | Funnel KPIs; Health Index completions are leads and buyers are live-mode succeeded Stripe payments | None |
 
 ## D1 bindings
 

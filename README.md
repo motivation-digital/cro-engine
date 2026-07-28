@@ -37,6 +37,8 @@ GitHub Actions deploys via Cloudflare API (direct CF API, NOT wrangler).
 
 - `POST /events` — Frontend event ingest
 - `POST /purchase` — Server-side purchase (from stripe-payments)
+- `GET /funnel/:tenant` — Funnel KPIs; completed Health Index records are leads and
+  buyers/revenue come from succeeded live-mode Stripe payments (test mode excluded)
 - `GET /health` — Binding status
 
 ## References
