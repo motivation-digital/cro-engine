@@ -7,6 +7,7 @@
 import { eventCounts } from './ga4.js';
 
 const DBC_CID = '5740015733';
+const DBC_PAYMENT_TENANT = 'dbc';
 const GA4_PROPERTY = '542615107';
 
 // Verified benchmark bands (directional; generic-ecommerce ones are the loosest sanity checks).
@@ -24,8 +25,13 @@ async function gads(env, path) {
   return r.json();
 }
 
-async function row(db, sql) {
-  try { return (await db.prepare(sql).first()) || {}; } catch (e) { return { _error: String(e && e.message) }; }
+async function row(db, sql, ...params) {
+  try {
+    const statement = db.prepare(sql);
+    return (await (params.length ? statement.bind(...params) : statement).first()) || {};
+  } catch (e) {
+    return { _error: String(e && e.message) };
+  }
 }
 
 export async function funnel(env, tenant) {
@@ -43,29 +49,45 @@ export async function funnel(env, tenant) {
     out.stages.quiz_completions = { total: c.total, last24h: c.d1, last7d: c.d7, last30d: c.d30, most_recent: c.latest, _error: c._error };
   }
 
-  // ── Checkouts + buyers (payments D1); test transactions excluded from buyers ──
-  // Every succeeded payment to date is a Christopher test (confirmed 2026-07-11) — the
-  // email heuristic only caught some of them, so we also gate on REAL_BUYERS_SINCE: a real
-  // buyer is a succeeded payment after that cutoff AND not a known test address. When a
-  // genuine sale lands, lower this date to include it (there are zero to exclude before it).
-  const REAL_BUYERS_SINCE = '2026-07-11';
+  // ── Checkouts + buyers (payments D1) ──
+  // `stripe_mode` is the authoritative test/live boundary. Do not infer a test payment from
+  // its email address or date: those heuristics suppressed genuine live Stripe sales.
+  // purchased_at is authoritative because created_at is nullable in the live schema.
   if (env.DB_PAYMENTS) {
     const co = await row(env.DB_PAYMENTS,
       "SELECT COUNT(DISTINCT email) started_distinct, " +
-      "SUM(CASE WHEN datetime(created_at)>datetime('now','-7 days') THEN 1 ELSE 0 END) started_7d FROM payments");
-    const testFilter = "email NOT LIKE '%@motivation.digital' AND email NOT LIKE '%baranenko%' " +
-      "AND datetime(created_at) > datetime('" + REAL_BUYERS_SINCE + "')";
+      "COUNT(DISTINCT CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN email END) started_7d, " +
+      "COUNT(DISTINCT CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN email END) started_30d " +
+      "FROM payments WHERE tenant_id=? AND stripe_mode='live'",
+      DBC_PAYMENT_TENANT);
     const b = await row(env.DB_PAYMENTS,
       "SELECT COUNT(*) total, " +
-      "SUM(CASE WHEN datetime(created_at)>datetime('now','-7 days') THEN 1 ELSE 0 END) d7, " +
-      "SUM(price_amount) rev_pence FROM payments WHERE status='succeeded' AND " + testFilter);
-    const succeeded = await row(env.DB_PAYMENTS,
-      "SELECT COUNT(*) total FROM payments WHERE status='succeeded'");
-    out.stages.checkout_starts = { distinct_people: co.started_distinct, last7d: co.started_7d, _error: co._error };
+      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN 1 ELSE 0 END) d7, " +
+      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN 1 ELSE 0 END) d30, " +
+      "SUM(price_amount) rev_pence, " +
+      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-7 days') THEN price_amount ELSE 0 END) rev_7d_pence, " +
+      "SUM(CASE WHEN datetime(COALESCE(purchased_at,created_at))>datetime('now','-30 days') THEN price_amount ELSE 0 END) rev_30d_pence " +
+      "FROM payments WHERE tenant_id=? AND stripe_mode='live' AND status='succeeded'",
+      DBC_PAYMENT_TENANT);
+    const testSucceeded = await row(env.DB_PAYMENTS,
+      "SELECT COUNT(*) total FROM payments WHERE tenant_id=? AND stripe_mode='test' AND status='succeeded'",
+      DBC_PAYMENT_TENANT);
+    out.stages.checkout_starts = {
+      distinct_people: co.started_distinct,
+      last7d: co.started_7d,
+      last30d: co.started_30d,
+      note: 'live Stripe checkouts; test mode excluded',
+      _error: co._error,
+    };
     out.stages.buyers = {
-      total: b.total || 0, last7d: b.d7 || 0, revenue_gbp: (b.rev_pence || 0) / 100,
-      succeeded_all_time: succeeded.total || 0,
-      note: `${succeeded.total || 0} succeeded payments to date are all confirmed test purchases; real buyers count from ${REAL_BUYERS_SINCE}`,
+      total: b.total || 0,
+      last7d: b.d7 || 0,
+      last30d: b.d30 || 0,
+      revenue_gbp: (b.rev_pence || 0) / 100,
+      revenue_7d_gbp: (b.rev_7d_pence || 0) / 100,
+      revenue_30d_gbp: (b.rev_30d_pence || 0) / 100,
+      test_succeeded_excluded: testSucceeded.total || 0,
+      note: 'live Stripe succeeded payments; test mode excluded',
       _error: b._error,
     };
   }
