@@ -107,8 +107,9 @@ export async function ensureKeyEvent(sa, propertyId, eventName) {
   return { created: true, keyEvent: created, config: await measurementConfig(sa, propertyId) };
 }
 
-// Returns { eventName: count } over the last `days` days for the property.
+// Returns { eventName: count } for 7 days, 30 days, or all available GA4 history.
 export async function eventCounts(sa, propertyId, days) {
+  const startDate = days === 'all' ? '2020-01-01' : days + 'daysAgo';
   const token = await getAccessToken(sa);
   const res = await fetch(
     'https://analyticsdata.googleapis.com/v1beta/properties/' + propertyId + ':runReport',
@@ -116,7 +117,7 @@ export async function eventCounts(sa, propertyId, days) {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        dateRanges: [{ startDate: days + 'daysAgo', endDate: 'today' }],
+        dateRanges: [{ startDate, endDate: 'today' }],
         dimensions: [{ name: 'eventName' }],
         metrics: [{ name: 'eventCount' }],
         limit: 250,
