@@ -38,8 +38,9 @@ GitHub Actions deploys via Cloudflare API (direct CF API, NOT wrangler).
 
 - `POST /events` — Frontend event ingest (`client_id` preserves browser/ad attribution)
 - `POST /purchase` — Server-side purchase (from stripe-payments)
-- `GET /funnel/:tenant` — Funnel KPIs; completed Health Index records are leads and
-  buyers/revenue come from succeeded live-mode Stripe payments (test mode excluded)
+- `GET /funnel/:tenant?range=7|30|all` — one selected-period KPI contract across GA4
+  traffic, completed Health Index leads, Google Ads engagement, distinct Stripe checkout
+  people/attempts, buyers, refunds and exclusions. Defaults to 30 days; test mode is excluded.
 - `GET /measurement/:tenant` — GA4 payload, key-event, Ads-link and event-count readiness
 - `POST /measurement/:tenant` — Admin-key-gated, idempotent Health Index key-event setup
 - `GET /health` — Binding status

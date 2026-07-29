@@ -420,7 +420,11 @@ export default {
 
       // Funnel KPIs (read-only): /funnel/:tenant (GET) — one front-to-back view from every source.
       if (path.startsWith('/funnel/') && req.method === 'GET') {
-        return json(await funnel(env, decodeURIComponent(path.slice('/funnel/'.length))));
+        return json(await funnel(
+          env,
+          decodeURIComponent(path.slice('/funnel/'.length)),
+          url.searchParams.get('range')
+        ));
       }
 
       // CRO Operator (read-only recommend): /operator/:tenant/recommend?cid= (GET)

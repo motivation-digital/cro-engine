@@ -33,7 +33,7 @@ Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 | POST | /events | Frontend event ingest | CORS-gated (consent pending) |
 | POST | /purchase | Server-side purchase (from stripe-payments) | Internal |
 | GET | /health | Binding status check | None |
-| GET | /funnel/:tenant | Funnel KPIs; Health Index completions are leads; checkout attempts/incompletes, new funnel buyers, refunds and payment exclusions are separate Stripe outcomes | None |
+| GET | /funnel/:tenant?range=7\|30\|all | One selected-period funnel contract across GA4 traffic, Health Index leads, Google Ads engagement and Stripe checkout people/attempts, buyers, refunds and exclusions; defaults to 30 | None |
 | GET | /measurement/:tenant | GA4 payload validation, key-event/link state, and 7/30-day lead/purchase event counts | None |
 | POST | /measurement/:tenant | Idempotently create `health_index_complete` as a once-per-session GA4 key event | X-Admin-Key |
 
