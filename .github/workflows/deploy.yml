@@ -48,6 +48,7 @@ jobs:
             const fs = require("fs");
             const bindings = [
               { type: "plain_text", name: "GA4_MEASUREMENT_ID", text: "G-KQH8EKYZ9L" },
+              { type: "plain_text", name: "BUILD_SHA", text: process.env.GITHUB_SHA },
               { type: "secrets_store_secret", name: "GA4_API_SECRET", secret_name: "cro-engine-dbc", store_id: "170e0688af5f479292e0ab52c980eff7" },
               { type: "d1", name: "DB_SITES", database_id: process.env.DB_SITES_ID },
               { type: "d1", name: "DB_INDEX", database_id: "4cce8f4d-c867-4b9a-9f3a-bb34d4ab76fe" },
@@ -134,11 +135,16 @@ jobs:
             exit 1
           fi
           grep -q '"DB_SITES"' /tmp/cf-settings.json || { echo "::error::D1 DB_SITES binding missing"; exit 1; }
+          grep -q '"BUILD_SHA"' /tmp/cf-settings.json || { echo "::error::BUILD_SHA binding missing"; exit 1; }
           grep -q '"GA4_SA"' /tmp/cf-settings.json && echo "PASS: GA4_SA (Measure credential) bound" || echo "WARN: GA4_SA not bound — Measure stays dark"
           echo "PASS: critical bindings check complete"
 
       - name: Smoke test
         run: |
-          echo "✓ Deployed via CF API (HTTP 200); collector + CRO engine v1 (read-only)"
-          echo "✓ /events /purchase /typeform collectors live; /cro/:tenant/report + /run live; daily cron registered"
-          echo "✓ Measure switches on when GA4_SA (GA4_SA_JSON) is bound"
+          curl -fsS https://cro-engine.launchpad.workers.dev/health > /tmp/health.json
+          grep -q "\"build_sha\":\"${GITHUB_SHA}\"" /tmp/health.json || {
+            echo "::error::Live build SHA does not match ${GITHUB_SHA}"
+            cat /tmp/health.json
+            exit 1
+          }
+          echo "PASS: deployed SHA ${GITHUB_SHA} is live"

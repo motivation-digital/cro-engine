@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeRange, paymentStages } from '../src/funnel.js';
+import { measurementReconciliation, normalizeRange, paymentStages } from '../src/funnel.js';
 
 test('maps payment truth into separate funnel outcomes', () => {
   const stages = paymentStages({
@@ -60,4 +60,53 @@ test('normalizes funnel periods to 7, 30 or all', () => {
   assert.equal(normalizeRange('30'), '30');
   assert.equal(normalizeRange('all'), 'all');
   assert.equal(normalizeRange('90'), '30');
+});
+
+test('reconciles D1 truth without inventing lost leads', () => {
+  const stage = measurementReconciliation({
+    d1_leads: 90,
+    callback_captured: 12,
+    analytics_eligible: 11,
+    gclid_captured: 4,
+    missing_callback: 78,
+    ledger_records: 19,
+    delivery_sent: 16,
+    sent_with_browser_identity: 10,
+    fallback_sent: 6,
+    delivery_pending: 2,
+    delivery_failed: 1,
+    waiting_for_d1: 3,
+  }, {
+    health_index_complete: 15,
+  }, [{
+    id: '7700660818',
+    name: 'Dreambody.club (web) health_index_complete',
+    ga4EventName: 'health_index_complete',
+    status: 'ENABLED',
+    primaryForGoal: true,
+    countingType: 'ONE_PER_CLICK',
+    conversions: 3,
+    allConversions: 3,
+  }], '30');
+
+  assert.equal(stage.d1.leads, 90);
+  assert.equal(stage.callback.missing, 78);
+  assert.equal(stage.delivery.sent, 16);
+  assert.equal(stage.ga4.observed, 15);
+  assert.equal(stage.google_ads.attributed, 3);
+  assert.match(stage.interpretation, /not a lost-leads calculation/);
+});
+
+test('keeps unavailable reconciliation sources distinct from a real zero', () => {
+  const performance = [];
+  performance._error = 'Ads unavailable';
+  const stage = measurementReconciliation(
+    { _error: 'D1 unavailable' },
+    { _error: 'GA4 unavailable' },
+    performance,
+    '7'
+  );
+  assert.equal(stage.d1.leads, null);
+  assert.equal(stage.ga4.observed, null);
+  assert.equal(stage.google_ads.attributed, null);
 });

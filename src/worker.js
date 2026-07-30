@@ -375,7 +375,7 @@ async function handleHealth(env) {
   // ga4_data_api / typeform_verify are not required for the collector to be healthy.
   const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
 
-  return new Response(JSON.stringify({ ok, service: 'cro-engine', checks }), {
+  return new Response(JSON.stringify({ ok, service: 'cro-engine', build_sha: env.BUILD_SHA || null, checks }), {
     status: ok ? 200 : 503,
     headers: { 'Content-Type': 'application/json' },
   });
