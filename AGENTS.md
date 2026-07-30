@@ -21,6 +21,10 @@ GA4 secret (cro-engine-dbc in Cloudflare Secrets Store) provisioned. Binding wir
 Front-end events: thin first-party signal flow from pages → cro-engine /events → GA4.
 GA4 Measurement Protocol credentials are query parameters (not JSON fields); `/measurement/:tenant`
 validates the payload, reads GA4 key events + Google Ads links, and exposes current event counts.
+`/funnel/:tenant` reconciles the selected period from non-test D1 Contacts through the consented
+measurement ledger, GA4 observation and Google Ads conversion-action attribution. It never treats
+the difference between two sources as automatically lost leads. Result-page fallback delivery is a
+separate diagnostic and never stands in for consented browser/ad-click identity.
 
 Server-side purchase: stripe-payments webhook posts to /purchase after successful payment record.
 
@@ -32,8 +36,8 @@ Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 | --- | --- | --- | --- |
 | POST | /events | Frontend event ingest | CORS-gated (consent pending) |
 | POST | /purchase | Server-side purchase (from stripe-payments) | Internal |
-| GET | /health | Binding status check | None |
-| GET | /funnel/:tenant?range=7\|30\|all | One selected-period funnel contract across GA4 traffic, Health Index leads, Google Ads engagement and Stripe checkout people/attempts, buyers, refunds and exclusions; defaults to 30 | None |
+| GET | /health | Binding status + deployed build SHA | None |
+| GET | /funnel/:tenant?range=7\|30\|all | One selected-period funnel contract across GA4 traffic, Health Index leads, D1→GA4→Ads reconciliation, Google Ads engagement and Stripe checkout people/attempts, buyers, refunds and exclusions; defaults to 30 | None |
 | GET | /measurement/:tenant | GA4 payload validation, key-event/link state, and 7/30-day lead/purchase event counts | None |
 | POST | /measurement/:tenant | Idempotently create `health_index_complete` as a once-per-session GA4 key event | X-Admin-Key |
 

@@ -38,6 +38,11 @@ export function normalizeRange(range) {
   return ['7', '30', 'all'].includes(String(range)) ? String(range) : '30';
 }
 
+function selectedSqlRange(column, range) {
+  if (range === 'all') return '1=1';
+  return `datetime(${column}) > datetime('now','-${range} days')`;
+}
+
 function ranged(source, range, allKey, day7Key, day30Key) {
   if (range === '7') return Number(source[day7Key] || 0);
   if (range === '30') return Number(source[day30Key] || 0);
@@ -116,6 +121,62 @@ export function paymentStages(p = {}, testSucceeded = {}, requestedRange = '30')
   };
 }
 
+export function measurementReconciliation(raw = {}, ga4Counts = {}, conversionPerformance = [], requestedRange = '30') {
+  const range = normalizeRange(requestedRange);
+  const unavailable = Boolean(raw._error);
+  const value = (key) => unavailable ? null : Number(raw[key] || 0);
+  const leadAction = conversionPerformance.find((action) => action.ga4EventName === 'health_index_complete')
+    || conversionPerformance.find((action) => /health index/i.test(action.name || ''));
+
+  return {
+    period: range,
+    d1: {
+      leads: value('d1_leads'),
+      most_recent: unavailable ? null : raw.most_recent_lead || null,
+      source: 'non-test health_index_results Contacts',
+      _error: raw._error,
+    },
+    callback: {
+      captured: value('callback_captured'),
+      analytics_eligible: value('analytics_eligible'),
+      gclid_captured: value('gclid_captured'),
+      missing: value('missing_callback'),
+      note: 'The browser callback is consent-gated. Missing does not automatically mean a lost lead.',
+      _error: raw._error,
+    },
+    delivery: {
+      ledger_records: value('ledger_records'),
+      sent: value('delivery_sent'),
+      sent_with_browser_identity: value('sent_with_browser_identity'),
+      fallback_sent: value('fallback_sent'),
+      pending: value('delivery_pending'),
+      failed: value('delivery_failed'),
+      waiting_for_d1: value('waiting_for_d1'),
+      most_recent_sent: unavailable ? null : raw.most_recent_sent || null,
+      latest_error: unavailable ? null : raw.latest_error || null,
+      note: 'Result-page fallback delivery is reported separately from consented browser attribution.',
+      _error: raw._error,
+    },
+    ga4: {
+      observed: ga4Counts._error ? null : Number(ga4Counts.health_index_complete || 0),
+      note: 'GA4 event count in the selected period; it is not automatically ad-attributed.',
+      _error: ga4Counts._error,
+    },
+    google_ads: {
+      action_name: leadAction?.name || null,
+      action_id: leadAction?.id || null,
+      status: leadAction?.status || null,
+      primary: leadAction?.primaryForGoal ?? null,
+      counting_type: leadAction?.countingType || null,
+      attributed: leadAction ? Number(leadAction.conversions || 0) : null,
+      all_attributed: leadAction ? Number(leadAction.allConversions || 0) : null,
+      note: 'Google Ads attribution for the health_index_complete action only.',
+      _error: conversionPerformance._error,
+    },
+    interpretation: 'D1 is lead truth. GA4 is the observed analytics subset. Google Ads is the attributed subset. Differences are diagnostic boundaries, not a lost-leads calculation.',
+  };
+}
+
 export async function funnel(env, tenant, requestedRange = '30') {
   if (tenant !== 'dreambody.club') return { ok: false, reason: 'only dreambody.club instrumented' };
   const range = normalizeRange(requestedRange);
@@ -130,13 +191,15 @@ export async function funnel(env, tenant, requestedRange = '30') {
   };
 
   // ── Quiz completions (dbc-index D1) — the real leads ──
+  let rawReconciliation = {};
   if (env.DB_INDEX) {
     const c = await row(env.DB_INDEX,
       "SELECT COUNT(*) total, " +
       "SUM(CASE WHEN datetime(submitted_at)>datetime('now','-24 hours') THEN 1 ELSE 0 END) d1, " +
       "SUM(CASE WHEN datetime(submitted_at)>datetime('now','-7 days') THEN 1 ELSE 0 END) d7, " +
       "SUM(CASE WHEN datetime(submitted_at)>datetime('now','-30 days') THEN 1 ELSE 0 END) d30, " +
-      "MAX(submitted_at) latest FROM health_index_results");
+      "MAX(submitted_at) latest FROM health_index_results " +
+      "WHERE COALESCE(source,'lead') <> 'test'");
     out.stages.quiz_completions = {
       total: c.total,
       last24h: c.d1,
@@ -146,6 +209,56 @@ export async function funnel(env, tenant, requestedRange = '30') {
       most_recent: c.latest,
       _error: c._error,
     };
+    const leadRange = selectedSqlRange('l.submitted_at', range);
+    rawReconciliation = await row(env.DB_INDEX, `
+      WITH leads AS (
+        SELECT typeform_response_id, result_token, submitted_at
+        FROM health_index_results l
+        WHERE COALESCE(source,'lead') <> 'test' AND ${leadRange}
+      )
+      SELECT
+        COUNT(*) AS d1_leads,
+        MAX(l.submitted_at) AS most_recent_lead,
+        SUM(CASE WHEN callback.event_key IS NOT NULL THEN 1 ELSE 0 END) AS callback_captured,
+        SUM(CASE WHEN callback.client_id IS NOT NULL AND trim(callback.client_id) <> '' THEN 1 ELSE 0 END) AS analytics_eligible,
+        SUM(CASE WHEN callback.gclid IS NOT NULL AND trim(callback.gclid) <> '' THEN 1 ELSE 0 END) AS gclid_captured,
+        SUM(CASE WHEN callback.event_key IS NULL THEN 1 ELSE 0 END) AS missing_callback,
+        SUM(CASE WHEN callback.event_key IS NOT NULL OR fallback.event_key IS NOT NULL THEN 1 ELSE 0 END) AS ledger_records,
+        SUM(CASE WHEN callback.status='sent' OR fallback.status='sent' THEN 1 ELSE 0 END) AS delivery_sent,
+        SUM(CASE WHEN (callback.status='sent' AND callback.client_id IS NOT NULL AND trim(callback.client_id) <> '')
+                    OR (fallback.status='sent' AND fallback.client_id IS NOT NULL AND trim(fallback.client_id) <> '')
+                 THEN 1 ELSE 0 END) AS sent_with_browser_identity,
+        SUM(CASE WHEN fallback.status='sent' THEN 1 ELSE 0 END) AS fallback_sent,
+        SUM(CASE WHEN COALESCE(callback.status,'') <> 'sent' AND COALESCE(fallback.status,'') <> 'sent'
+                    AND (callback.status IN ('awaiting_contact','pending','retry')
+                      OR fallback.status IN ('awaiting_contact','pending','retry'))
+                 THEN 1 ELSE 0 END) AS delivery_pending,
+        SUM(CASE WHEN COALESCE(callback.status,'') <> 'sent' AND COALESCE(fallback.status,'') <> 'sent'
+                    AND (callback.status='failed' OR fallback.status='failed')
+                 THEN 1 ELSE 0 END) AS delivery_failed,
+        MAX(CASE WHEN callback.sent_at >= fallback.sent_at OR fallback.sent_at IS NULL
+                 THEN callback.sent_at ELSE fallback.sent_at END) AS most_recent_sent,
+        MAX(COALESCE(callback.last_error, fallback.last_error)) AS latest_error
+      FROM leads l
+      LEFT JOIN measurement_events callback
+        ON callback.event_key = 'health_index_complete:' || l.typeform_response_id
+      LEFT JOIN measurement_events fallback
+        ON fallback.event_key = 'health_index_complete:' || l.result_token`);
+
+    const waitingRange = selectedSqlRange('m.first_seen_at', range);
+    const waiting = await row(env.DB_INDEX, `
+      SELECT COUNT(*) AS waiting_for_d1
+      FROM measurement_events m
+      LEFT JOIN health_index_results h
+        ON m.event_key = 'health_index_complete:' || h.typeform_response_id
+      WHERE m.event_name='health_index_complete'
+        AND m.status='awaiting_contact'
+        AND h.id IS NULL
+        AND ${waitingRange}`);
+    rawReconciliation.waiting_for_d1 = waiting.waiting_for_d1;
+    rawReconciliation._error = rawReconciliation._error || waiting._error;
+  } else {
+    rawReconciliation = { _error: 'DB_INDEX unavailable' };
   }
 
   // ── Checkouts + buyers (payments D1) ──
@@ -260,6 +373,7 @@ export async function funnel(env, tenant, requestedRange = '30') {
   }
 
   // ── Paid engagement (Google Ads, selected period) ──
+  let conversionPerformance = [];
   try {
     const camp = await gads(env, `/accounts/${DBC_CID}/campaigns?days=${range}`);
     const cs = camp.campaigns || [];
@@ -276,18 +390,38 @@ export async function funnel(env, tenant, requestedRange = '30') {
     };
   } catch (e) { out.stages.paid = { period: range, error: String(e && e.message) }; }
 
+  try {
+    const performance = await gads(env, `/accounts/${DBC_CID}/conversion-performance?days=${range}`);
+    conversionPerformance = performance.conversionPerformance || [];
+  } catch (e) {
+    conversionPerformance = [];
+    conversionPerformance._error = String(e && e.message);
+  }
+
   // ── Traffic (GA4 page_view + session + form events, selected period) ──
+  let ga4Counts = {};
   try {
     const sa = JSON.parse(typeof env.GA4_SA === 'string' ? env.GA4_SA : await env.GA4_SA.get());
-    const c = await eventCounts(sa, GA4_PROPERTY, range);
+    ga4Counts = await eventCounts(sa, GA4_PROPERTY, range);
     out.stages.traffic = {
       period: range,
-      page_views: c.page_view || 0,
-      sessions: c.session_start || 0,
-      form_start: c.form_start || 0,
-      form_submit: c.form_submit || 0,
+      page_views: ga4Counts.page_view || 0,
+      sessions: ga4Counts.session_start || 0,
+      form_start: ga4Counts.form_start || 0,
+      form_submit: ga4Counts.form_submit || 0,
+      health_index_complete: ga4Counts.health_index_complete || 0,
     };
-  } catch (e) { out.stages.traffic = { period: range, error: String(e && e.message) }; }
+  } catch (e) {
+    ga4Counts = { _error: String(e && e.message) };
+    out.stages.traffic = { period: range, error: String(e && e.message) };
+  }
+
+  out.stages.measurement_reconciliation = measurementReconciliation(
+    rawReconciliation,
+    ga4Counts,
+    conversionPerformance,
+    range
+  );
 
   // ── Known measurement gaps (be honest about what we cannot yet see) ──
   out.gaps.push('offer_section_visibility — no page-reading tool yet (Microsoft Clarity / Hotjar); cannot see if a completer scrolls to the paid offer on /results (the NOOM hinge)');
