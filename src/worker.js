@@ -303,7 +303,8 @@ async function handleServerPurchase(req, env) {
 // The DBC health-index quiz is a Typeform popup (form nwPP4TfP). Typeform Plus keeps webhooks
 // (the native GA4 connector is gated behind Business). This webhook is a reliable server-side
 // completion diagnostic, but it cannot carry the visitor's GA identity. The primary attributed
-// health_index_complete lead is emitted once by dbc-index when the results data is read.
+// health_index_complete lead is emitted by dbc-index only after the successful browser callback's
+// Typeform response id becomes a real D1 Contact; results-data is a deduplicated fallback.
 // Signature: if TYPEFORM_WEBHOOK_SECRET is bound, verify the `Typeform-Signature` header
 // (sha256=base64(HMAC-SHA256(secret, rawBody))); if unset, accept (turn on verification later).
 
