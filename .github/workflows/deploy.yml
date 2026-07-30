@@ -141,10 +141,15 @@ jobs:
 
       - name: Smoke test
         run: |
-          curl -fsS https://cro-engine.launchpad.workers.dev/health > /tmp/health.json
-          grep -q "\"build_sha\":\"${GITHUB_SHA}\"" /tmp/health.json || {
-            echo "::error::Live build SHA does not match ${GITHUB_SHA}"
-            cat /tmp/health.json
-            exit 1
-          }
-          echo "PASS: deployed SHA ${GITHUB_SHA} is live"
+          for ATTEMPT in $(seq 1 12); do
+            if curl -fsS https://cro-engine.launchpad.workers.dev/health > /tmp/health.json &&
+              grep -q "\"build_sha\":\"${GITHUB_SHA}\"" /tmp/health.json; then
+              echo "PASS: deployed SHA ${GITHUB_SHA} is live"
+              exit 0
+            fi
+            echo "Waiting for deployed SHA ${GITHUB_SHA} (attempt ${ATTEMPT}/12)"
+            sleep 5
+          done
+          echo "::error::Live build SHA does not match ${GITHUB_SHA}"
+          cat /tmp/health.json
+          exit 1
