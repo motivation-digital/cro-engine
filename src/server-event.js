@@ -3,14 +3,15 @@
 //                       value?, currency?, ad_consent?, debug? }
 //
 // signup_verified comes from dbc-site when the email code is proven; purchase comes from
-// stripe-payments when a Start payment is fulfilled. Both carry the visitor's own GA client id
+// stripe-payments when a Start payment is fulfilled; begin_checkout from stripe-payments when a Start or membership
+// checkout opens (value + currency + item, no transaction id). Both carry the visitor's own GA client id
 // (the _ga cookie captured at signup), so GA4 joins the conversion to the session that carried the
 // gclid/UTMs. Without it the event still counts, under a stable id derived from fallback_id.
 // ad_consent mirrors the visitor's Consent Mode choice (ad_user_data + ad_personalization).
 // debug=true sends to GA4's validation endpoint instead: nothing is recorded, the validation
 // messages come back. The test lanes always set it, so test traffic never reaches live GA4.
 
-export const SERVER_EVENTS = new Set(['signup_verified', 'purchase']);
+export const SERVER_EVENTS = new Set(['signup_verified', 'begin_checkout', 'purchase']);
 
 function hashId(value) {
   let hash = 2166136261;
@@ -39,6 +40,12 @@ export function buildServerEvent(body) {
     params.value = value;
     params.currency = String(b.currency).toUpperCase();
     params.affiliation = String(b.tenant_id);
+    if (b.item_id) params.items = [{ item_id: String(b.item_id), item_name: String(b.item_name || b.item_id), price: value, quantity: 1 }];
+  } else if (b.event_name === 'begin_checkout') {
+    const value = Number(b.value);
+    if (!(value > 0) || !/^[A-Za-z]{3}$/.test(String(b.currency || ''))) return { error: 'begin_checkout needs value and currency' };
+    params.value = value;
+    params.currency = String(b.currency).toUpperCase();
     if (b.item_id) params.items = [{ item_id: String(b.item_id), item_name: String(b.item_name || b.item_id), price: value, quantity: 1 }];
   } else {
     params.method = 'email_code';

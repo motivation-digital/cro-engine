@@ -30,3 +30,12 @@ test('rejects unknown events and incomplete purchases', () => {
   assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'purchase', fallback_id: 'x', value: 9.97, currency: 'GBP' }).error);
   assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'signup_verified' }).error);
 });
+
+test('begin_checkout carries value, currency and item, no transaction id', () => {
+  const { payload } = buildServerEvent({ tenant_id: 'dbc', event_name: 'begin_checkout', client_id: '123.456', value: 19.95, currency: 'gbp', item_id: 'membership_start_monthly' });
+  const p = payload.events[0].params;
+  assert.equal(payload.events[0].name, 'begin_checkout');
+  assert.equal(p.value, 19.95); assert.equal(p.currency, 'GBP'); assert.equal(p.items[0].item_id, 'membership_start_monthly');
+  assert.equal(p.transaction_id, undefined); assert.equal(p.method, undefined);
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'begin_checkout', fallback_id: 'x' }).error);
+});
