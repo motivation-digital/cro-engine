@@ -10,7 +10,7 @@ Repo: https://github.com/motivation-digital/lifecycle
 - GA4_MEASUREMENT_ID binding (plain_text, G-KQH8EKYZ9L — locked to DBC property, used by dbc-site + dbc-index + dbc-portal + stripe-payments)
 - GA4_API_SECRET binding (Secrets Store key cro-engine-dbc — provisioned in Rule 28 pattern)
 - DB_SITES binding (multi-tenant tenant resolution)
-- /events + /purchase routes (consumed by dbc-site, dbc-index, dbc-portal, stripe-payments)
+- /events + /purchase + /server-event routes (consumed by dbc-site, dbc-index, dbc-portal, stripe-payments)
 
 ## Current state
 
@@ -35,7 +35,8 @@ Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 | Method | Path | Purpose | Auth |
 | --- | --- | --- | --- |
 | POST | /events | Frontend event ingest | CORS-gated (consent pending) |
-| POST | /purchase | Server-side purchase (from stripe-payments) | Internal |
+| POST | /purchase | Server-side purchase (legacy core flow, from stripe-payments) | Internal |
+| POST | /server-event | New-funnel conversions (AGI-9000826): `signup_verified` from dbc-site, Start `purchase` from stripe-payments. Carries the visitor's own GA client id + session id captured at signup and her ad-consent state; `debug:true` sends to GA4 /debug/mp/collect (nothing recorded, validation returned) and the test lanes always set it | Internal (service binding) |
 | GET | /health | Binding status + deployed build SHA | None |
 | GET | /funnel/:tenant?range=7\|30\|all | One selected-period funnel contract across GA4 traffic, Health Index leads, D1→GA4→Ads reconciliation, Google Ads engagement and Stripe checkout people/attempts, buyers, refunds and exclusions; defaults to 30 | None |
 | GET | /measurement/:tenant | GA4 payload validation, key-event/link state, and 7/30-day lead/purchase event counts | None |
