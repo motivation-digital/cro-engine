@@ -39,3 +39,12 @@ test('begin_checkout carries value, currency and item, no transaction id', () =>
   assert.equal(p.transaction_id, undefined); assert.equal(p.method, undefined);
   assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'begin_checkout', fallback_id: 'x' }).error);
 });
+
+test('chat events carry only cleaned label params', () => {
+  const { payload } = buildServerEvent({ tenant_id: 'dbc', event_name: 'chat_open', fallback_id: 'chat:p1', trigger: 'Exit', chat_page: 'start_pay', topic: '<b>x</b>' });
+  const p = payload.events[0].params;
+  assert.equal(payload.events[0].name, 'chat_open');
+  assert.equal(p.trigger, 'exit'); assert.equal(p.chat_page, 'start_pay'); assert.equal(p.topic, 'bxb');
+  assert.equal(p.method, undefined); assert.equal(p.value, undefined);
+  for (const e of ['chat_topic', 'chat_question', 'chat_checkout']) assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: e, fallback_id: 'x' }).payload);
+});
