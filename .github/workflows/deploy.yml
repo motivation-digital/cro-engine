@@ -55,6 +55,7 @@ jobs:
               { type: "d1", name: "DB_PAYMENTS", database_id: "fdd09c88-c232-4ed8-8d0e-53179d61b22c" },
               { type: "service", name: "GADS", service: "gads-service" },
               { type: "secrets_store_secret", name: "GADS_ADMIN_KEY", secret_name: "gads_admin_key", store_id: "170e0688af5f479292e0ab52c980eff7" },
+              { type: "secrets_store_secret", name: "CRO_INTERNAL_KEY", secret_name: "cro_internal_key", store_id: "170e0688af5f479292e0ab52c980eff7" },
             ];
             if (process.env.GA4_SA_JSON && process.env.GA4_SA_JSON.trim()) {
               bindings.push({ type: "secret_text", name: "GA4_SA", text: process.env.GA4_SA_JSON });
