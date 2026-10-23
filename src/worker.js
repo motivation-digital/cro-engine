@@ -8,6 +8,7 @@ import { runCro, readReport, TENANTS } from './cro.js';
 import { recommend } from './operator.js';
 import { funnel } from './funnel.js';
 import { ensureKeyEvent, eventCounts, measurementConfig } from './ga4.js';
+import { handleServerEvent } from './server-event.js';
 
 // ─── GA4 Measurement Protocol ──────────────────────
 
@@ -401,6 +402,10 @@ export default {
 
       if (path === '/purchase' && req.method === 'POST') {
         return await handleServerPurchase(req, env);
+      }
+
+      if (path === '/server-event' && req.method === 'POST') {
+        return await handleServerEvent(req, env);
       }
 
       if (path === '/typeform' && req.method === 'POST') {
