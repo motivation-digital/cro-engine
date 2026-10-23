@@ -16,6 +16,14 @@ test('purchase keeps the visitor GA client id, value and consent', () => {
   assert.equal(p.items[0].item_id, 'start');
 });
 
+test('subscribe (first paid membership invoice) carries the purchase params under its own name', () => {
+  const { payload } = buildServerEvent({ tenant_id: 'dbc', event_name: 'subscribe', client_id: '123.456', transaction_id: 'in_1', value: 19.95, currency: 'gbp', item_id: 'membership_start_monthly' });
+  const p = payload.events[0].params;
+  assert.equal(payload.events[0].name, 'subscribe');
+  assert.equal(p.transaction_id, 'in_1'); assert.equal(p.value, 19.95); assert.equal(p.currency, 'GBP'); assert.equal(p.items[0].item_id, 'membership_start_monthly');
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'subscribe', fallback_id: 'x', value: 19.95, currency: 'GBP' }).error, 'needs a transaction id');
+});
+
 test('signup without a GA cookie gets a stable fallback id and denied ad consent', () => {
   const a = buildServerEvent({ tenant_id: 'dbc', event_name: 'signup_verified', fallback_id: 'sig-1' }).payload;
   const b = buildServerEvent({ tenant_id: 'dbc', event_name: 'signup_verified', fallback_id: 'sig-1' }).payload;

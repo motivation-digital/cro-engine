@@ -3,7 +3,8 @@
 //                       value?, currency?, ad_consent?, debug? }
 //
 // signup_verified comes from dbc-site when the email code is proven; purchase comes from
-// stripe-payments when a Start payment is fulfilled; begin_checkout from stripe-payments when a Start or membership
+// stripe-payments when a Start payment is fulfilled; subscribe from stripe-payments for the first paid membership
+// invoice (same params as purchase; its own name so Google Ads can count Start and membership apart); begin_checkout from stripe-payments when a Start or membership
 // checkout opens (value + currency + item, no transaction id); chat_open / chat_topic / chat_question /
 // chat_checkout from dbc-site when the Start funnel chat is used (params trigger, topic, chat_page). All carry the visitor's own GA client id
 // (the _ga cookie captured at signup), so GA4 joins the conversion to the session that carried the
@@ -13,7 +14,7 @@
 // messages come back. The test lanes always set it, so test traffic never reaches live GA4.
 
 export const CHAT_EVENTS = new Set(['chat_open', 'chat_topic', 'chat_question', 'chat_checkout']);
-export const SERVER_EVENTS = new Set(['signup_verified', 'begin_checkout', 'purchase', ...CHAT_EVENTS]);
+export const SERVER_EVENTS = new Set(['signup_verified', 'begin_checkout', 'purchase', 'subscribe', ...CHAT_EVENTS]);
 // Chat params are short labels chosen by our own page code (exit, idle, price, start_pay...), never free text.
 const chatParam = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 40);
 
@@ -35,10 +36,10 @@ export function buildServerEvent(body) {
   const params = { engagement_time_msec: 100 };
   const sid = String(b.session_id || '');
   if (/^\d+$/.test(sid) && Number(sid) > 0) params.session_id = Number(sid);
-  if (b.event_name === 'purchase') {
+  if (b.event_name === 'purchase' || b.event_name === 'subscribe') {
     const value = Number(b.value);
     if (!b.transaction_id || !(value > 0) || !/^[A-Za-z]{3}$/.test(String(b.currency || ''))) {
-      return { error: 'purchase needs transaction_id, value and currency' };
+      return { error: b.event_name + ' needs transaction_id, value and currency' };
     }
     params.transaction_id = String(b.transaction_id);
     params.value = value;
