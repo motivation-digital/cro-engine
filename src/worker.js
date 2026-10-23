@@ -9,6 +9,7 @@ import { recommend } from './operator.js';
 import { funnel } from './funnel.js';
 import { ensureKeyEvent, eventCounts, measurementConfig } from './ga4.js';
 import { handleServerEvent } from './server-event.js';
+import { internalAllowed, unauthorized } from './internal-auth.js';
 
 // ─── GA4 Measurement Protocol ──────────────────────
 
@@ -372,6 +373,7 @@ async function handleHealth(env) {
     ga4_data_api: !!env.GA4_SA, // Measure organ credential (GA4_SA_JSON) — optional until provisioned
     typeform_verify: !!env.TYPEFORM_WEBHOOK_SECRET, // webhook HMAC verification on/off (optional)
     gads_operator: !!env.GADS && !!env.GADS_ADMIN_KEY, // CRO Operator -> gads-service (recommend)
+    internal_key: !!env.CRO_INTERNAL_KEY, // gates /server-event + /purchase (AGI-9000590)
   };
   // ga4_data_api / typeform_verify are not required for the collector to be healthy.
   const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
@@ -401,10 +403,12 @@ export default {
       }
 
       if (path === '/purchase' && req.method === 'POST') {
+        if (!(await internalAllowed(req, env))) return unauthorized();
         return await handleServerPurchase(req, env);
       }
 
       if (path === '/server-event' && req.method === 'POST') {
+        if (!(await internalAllowed(req, env))) return unauthorized();
         return await handleServerEvent(req, env);
       }
 
