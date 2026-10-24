@@ -6,7 +6,9 @@
 // stripe-payments when a Start payment is fulfilled; subscribe from stripe-payments for the first paid membership
 // invoice (same params as purchase; its own name so Google Ads can count Start and membership apart); begin_checkout from stripe-payments when a Start or membership
 // checkout opens (value + currency + item, no transaction id); chat_open / chat_topic / chat_question /
-// chat_checkout from dbc-site when the Start funnel chat is used (params trigger, topic, chat_page). All carry the visitor's own GA client id
+// chat_checkout from dbc-site when the Start funnel chat is used (params trigger, topic, chat_page); outbound_click from dbc-site /go/<dest>
+// (a tracked social link: link_id = the go_links slug, link_domain, click_source / click_placement / click_content
+// from its ?s= code). All carry the visitor's own GA client id
 // (the _ga cookie captured at signup), so GA4 joins the conversion to the session that carried the
 // gclid/UTMs. Without it the event still counts, under a stable id derived from fallback_id.
 // ad_consent mirrors the visitor's Consent Mode choice (ad_user_data + ad_personalization).
@@ -14,7 +16,7 @@
 // messages come back. The test lanes always set it, so test traffic never reaches live GA4.
 
 export const CHAT_EVENTS = new Set(['chat_open', 'chat_topic', 'chat_question', 'chat_checkout']);
-export const SERVER_EVENTS = new Set(['signup_verified', 'begin_checkout', 'purchase', 'subscribe', ...CHAT_EVENTS]);
+export const SERVER_EVENTS = new Set(['signup_verified', 'begin_checkout', 'purchase', 'subscribe', 'outbound_click', ...CHAT_EVENTS]);
 // Chat params are short labels chosen by our own page code (exit, idle, price, start_pay...), never free text.
 const chatParam = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 40);
 
@@ -54,6 +56,12 @@ export function buildServerEvent(body) {
     if (b.item_id) params.items = [{ item_id: String(b.item_id), item_name: String(b.item_name || b.item_id), price: value, quantity: 1 }];
   } else if (CHAT_EVENTS.has(b.event_name)) {
     for (const k of ['trigger', 'topic', 'chat_page']) { const v = chatParam(b[k]); if (v) params[k] = v; }
+  } else if (b.event_name === 'outbound_click') {
+    // Labels from our own go_links / short_codes tables; [\w.-] only, video ids keep their case.
+    const label = (v) => String(v || '').replace(/[^\w.\-]/g, '').slice(0, 100);
+    params.outbound = true;
+    for (const k of ['link_id', 'link_domain', 'click_source', 'click_placement', 'click_content']) { const v = label(b[k]); if (v) params[k] = v; }
+    if (!params.link_id) return { error: 'outbound_click needs link_id' };
   } else {
     params.method = 'email_code';
   }
