@@ -39,8 +39,8 @@ Consent gate (TrustCentre signal / Zaraz bridge) — planned, not yet wired.
 | POST | /server-event | New-funnel conversions (AGI-9000826): `signup_verified` from dbc-site, Start `purchase`, membership `subscribe` (first paid membership invoice, same params as purchase, its own name so Google Ads counts Start and membership apart; 2026-10-23) and `begin_checkout` (Start or membership checkout opened: value, currency, item) from stripe-payments; `chat_open` / `chat_topic` / `chat_question` / `chat_checkout` from dbc-site for the Start funnel chat (label params `trigger`, `topic`, `chat_page` only, cleaned to `[a-z0-9_]`). Carries the visitor's own GA client id + session id captured at signup and her ad-consent state; `debug:true` sends to GA4 /debug/mp/collect (nothing recorded, validation returned) and the test lanes always set it | `X-Internal-Auth` = `cro_internal_key`; 401 otherwise |
 | GET | /health | Binding status + deployed build SHA | None |
 | GET | /funnel/:tenant?range=7\|30\|all | One selected-period funnel contract across GA4 traffic, Health Index leads, D1→GA4→Ads reconciliation, Google Ads engagement and Stripe checkout people/attempts, buyers, refunds and exclusions; defaults to 30 | None |
-| GET | /measurement/:tenant | GA4 payload validation, key-event/link state, and 7/30-day lead/purchase event counts | None |
-| POST | /measurement/:tenant | Idempotently create `health_index_complete` as a once-per-session GA4 key event | X-Admin-Key |
+| GET | /measurement/:tenant | GA4 payload validation, key-event/link state, and 7/30-day lead (`health_index_complete`, `signup_verified`)/purchase event counts | None |
+| POST | /measurement/:tenant?event= | Idempotently create a once-per-session GA4 key event: `health_index_complete` (default) or `signup_verified`; anything else 400 | X-Admin-Key |
 
 ## D1 bindings
 

@@ -137,6 +137,11 @@ async function measurementStatus(env, tenant) {
       payloadValid: !errors.validation && !(validation.validationMessages || []).length,
       validationMessages: validation.validationMessages || [],
     },
+    signupVerified: {
+      keyEvent: config.keyEvents.find((k) => k.eventName === 'signup_verified') || null,
+      eventCount7d: counts7d.signup_verified || 0,
+      eventCount30d: counts30d.signup_verified || 0,
+    },
     purchase: {
       eventCount7d: counts7d.purchase || 0,
       eventCount30d: counts30d.purchase || 0,
@@ -157,14 +162,19 @@ async function measurementStatus(env, tenant) {
   };
 }
 
+// Key events the setup endpoint may create (?event=, default health_index_complete).
+const SETUP_KEY_EVENTS = new Set(['health_index_complete', 'signup_verified']);
+
 async function setupMeasurement(req, env, tenant) {
   const key = await env.GADS_ADMIN_KEY.get();
   if (!key || req.headers.get('x-admin-key') !== key) return json({ error: 'unauthorized' }, 401);
   const cfg = TENANTS[tenant];
   if (!cfg) return json({ error: 'unknown_tenant' }, 404);
+  const eventName = new URL(req.url).searchParams.get('event') || 'health_index_complete';
+  if (!SETUP_KEY_EVENTS.has(eventName)) return json({ error: 'unsupported_event' }, 400);
   const sa = await ga4ServiceAccount(env);
   try {
-    const keyEvent = await ensureKeyEvent(sa, cfg.ga4_property, 'health_index_complete');
+    const keyEvent = await ensureKeyEvent(sa, cfg.ga4_property, eventName);
     return json({ ok: true, keyEvent, status: await measurementStatus(env, tenant) });
   } catch (error) {
     return json({
