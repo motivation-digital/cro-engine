@@ -56,3 +56,10 @@ test('chat events carry only cleaned label params', () => {
   assert.equal(p.method, undefined); assert.equal(p.value, undefined);
   for (const e of ['chat_topic', 'chat_question', 'chat_checkout']) assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: e, fallback_id: 'x' }).payload);
 });
+
+test('outbound_click carries the link and its short-code labels', () => {
+  const p = buildServerEvent({ tenant_id: 'dbc', event_name: 'outbound_click', fallback_id: 'go:1', link_id: 'ig', link_domain: 'www.instagram.com', click_source: 'youtube', click_placement: 'video_description', click_content: '70w9Hrhfg9U<x>' }).payload;
+  assert.equal(p.events[0].name, 'outbound_click');
+  assert.deepEqual({ ...p.events[0].params, engagement_time_msec: undefined }, { engagement_time_msec: undefined, outbound: true, link_id: 'ig', link_domain: 'www.instagram.com', click_source: 'youtube', click_placement: 'video_description', click_content: '70w9Hrhfg9Ux' });
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'outbound_click', fallback_id: 'go:2' }).error);
+});
