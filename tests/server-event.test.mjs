@@ -63,3 +63,23 @@ test('outbound_click carries the link and its short-code labels', () => {
   assert.deepEqual({ ...p.events[0].params, engagement_time_msec: undefined }, { engagement_time_msec: undefined, outbound: true, link_id: 'ig', link_domain: 'www.instagram.com', click_source: 'youtube', click_placement: 'video_description', click_content: '70w9Hrhfg9Ux' });
   assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'outbound_click', fallback_id: 'go:2' }).error);
 });
+
+test('calendar events carry the day (1..30) and the page label only', () => {
+  const p = buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_day_done', fallback_id: 'cal:p1', calendar_day: 7, calendar_page: 'Day<x>' }).payload;
+  assert.equal(p.events[0].name, 'calendar_day_done');
+  assert.equal(p.events[0].params.calendar_day, 7);
+  assert.equal(p.events[0].params.calendar_page, 'dayx');
+  const q = buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_start_click', fallback_id: 'cal:p2', calendar_day: 31 }).payload;
+  assert.equal(q.events[0].params.calendar_day, undefined);
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_day_open', fallback_id: 'cal:p3' }).payload);
+});
+
+test('calendar events carry the day (1..30) and the page label only', () => {
+  const p = buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_day_done', fallback_id: 'cal:p1', calendar_day: 7, calendar_page: 'Day<x>' }).payload;
+  assert.equal(p.events[0].name, 'calendar_day_done');
+  assert.equal(p.events[0].params.calendar_day, 7);
+  assert.equal(p.events[0].params.calendar_page, 'dayx');
+  const q = buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_start_click', fallback_id: 'cal:p2', calendar_day: 31 }).payload;
+  assert.equal(q.events[0].params.calendar_day, undefined);
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_day_open', fallback_id: 'cal:p3' }).payload);
+});
