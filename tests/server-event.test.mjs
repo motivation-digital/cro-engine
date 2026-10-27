@@ -83,3 +83,14 @@ test('calendar events carry the day (1..30) and the page label only', () => {
   assert.equal(q.events[0].params.calendar_day, undefined);
   assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'calendar_day_open', fallback_id: 'cal:p3' }).payload);
 });
+
+test('challenge events carry the slug, day (1..60), level and page; slug required', () => {
+  const p = buildServerEvent({ tenant_id: 'dbc', event_name: 'challenge_day_done', fallback_id: 'ch:p1', challenge_slug: '100-Prisedaniy<x>', challenge_day: 12, challenge_level: 'Advanced', challenge_page: 'day' }).payload;
+  assert.equal(p.events[0].name, 'challenge_day_done');
+  assert.equal(p.events[0].params.challenge_slug, '100-prisedaniyx');
+  assert.equal(p.events[0].params.challenge_day, 12);
+  assert.equal(p.events[0].params.challenge_level, 'advanced');
+  assert.equal(buildServerEvent({ tenant_id: 'dbc', event_name: 'challenge_join', fallback_id: 'ch:p2', challenge_slug: 'vyzov-21', challenge_day: 99 }).payload.events[0].params.challenge_day, undefined);
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'challenge_view', fallback_id: 'ch:p3' }).error);
+  assert.ok(buildServerEvent({ tenant_id: 'dbc', event_name: 'challenge_unlock_click', fallback_id: 'ch:p4', challenge_slug: '100-otzhimaniy', challenge_page: 'start' }).payload);
+});
