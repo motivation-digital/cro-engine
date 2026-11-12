@@ -311,67 +311,8 @@ async function handleServerPurchase(req, env) {
   });
 }
 
-// ─── Typeform webhook (completion diagnostic) ────────────────────
-// The DBC health-index quiz is a Typeform popup (form nwPP4TfP). Typeform Plus keeps webhooks
-// (the native GA4 connector is gated behind Business). This webhook is a reliable server-side
-// completion diagnostic, but it cannot carry the visitor's GA identity. The primary attributed
-// health_index_complete lead is emitted by dbc-index only after the successful browser callback's
-// Typeform response id becomes a real D1 Contact; results-data is a deduplicated fallback.
-// Signature: if TYPEFORM_WEBHOOK_SECRET is bound, verify the `Typeform-Signature` header
-// (sha256=base64(HMAC-SHA256(secret, rawBody))); if unset, accept (turn on verification later).
-
-async function hmacSha256Base64(secret, message) {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
-  const bytes = new Uint8Array(sig);
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s);
-}
-
-async function handleTypeform(req, env) {
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
-  }
-  const raw = await req.text();
-
-  const secret = env.TYPEFORM_WEBHOOK_SECRET; // secret_text string, optional
-  if (secret) {
-    const provided = req.headers.get('typeform-signature') || '';
-    const expected = 'sha256=' + (await hmacSha256Base64(secret, raw));
-    if (provided !== expected) {
-      return new Response(JSON.stringify({ success: false, reason: 'bad_signature' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-  }
-
-  let body;
-  try { body = JSON.parse(raw); } catch { return new Response('Invalid JSON', { status: 400 }); }
-
-  const fr = (body && body.form_response) || {};
-  const clientId = fr.token || crypto.randomUUID();
-  const gaEvent = {
-    name: 'health_index_complete_server',
-    params: {
-      form_id: fr.form_id || '',
-      engagement_time_msec: 100,
-    },
-  };
-
-  const success = await forwardToGA4(gaEvent, env, clientId);
-  return new Response(JSON.stringify({ success, verified: !!secret }), {
-    status: success ? 200 : 502,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
+// Typeform was retired with the native Health Index migration. The tombstone below
+// deliberately performs no parsing, storage access or outbound conversion delivery.
 
 // ─── Health check ───────────────────────────
 
@@ -381,11 +322,11 @@ async function handleHealth(env) {
     ga4_secret_store: !!env.GA4_API_SECRET,
     db_sites: !!env.DB_SITES,
     ga4_data_api: !!env.GA4_SA, // Measure organ credential (GA4_SA_JSON) — optional until provisioned
-    typeform_verify: !!env.TYPEFORM_WEBHOOK_SECRET, // webhook HMAC verification on/off (optional)
+    typeform_retired: true,
     gads_operator: !!env.GADS && !!env.GADS_ADMIN_KEY, // CRO Operator -> gads-service (recommend)
     internal_key: !!env.CRO_INTERNAL_KEY, // gates /server-event + /purchase (AGI-9000590)
   };
-  // ga4_data_api / typeform_verify are not required for the collector to be healthy.
+  // The optional GA4 Data API is not required for collection health.
   const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
 
   return new Response(JSON.stringify({ ok, service: 'cro-engine', build_sha: env.BUILD_SHA || null, checks }), {
@@ -422,8 +363,8 @@ export default {
         return await handleServerEvent(req, env);
       }
 
-      if (path === '/typeform' && req.method === 'POST') {
-        return await handleTypeform(req, env);
+      if (path === '/typeform') {
+        return json({ error: 'typeform_retired' }, 410);
       }
 
       if (path === '/health') {
