@@ -10,40 +10,38 @@ env:
   WORKER_NAME: "cro-engine"
   DB_SITES_ID: "80499765-3704-4c5d-ad25-ab88592fb075"
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          node-version: "24"
+
+      - name: Install locked build dependencies
+        run: npm ci --ignore-scripts
 
       - name: Test
         run: npm test
 
       - name: Bundle worker with esbuild
         run: |
-          npx --yes esbuild@latest src/worker.js \
-            --bundle \
-            --format=esm \
-            --target=es2022 \
-            --outfile=dist/worker.js
+          npm run build
           ls -la dist/
           echo "Bundle size: $(wc -c < dist/worker.js) bytes"
 
       - name: Deploy worker script via Cloudflare API
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          GA4_SA_JSON: ${{ secrets.GA4_SA_JSON }}
-          TYPEFORM_WEBHOOK_SECRET: ${{ secrets.TYPEFORM_WEBHOOK_SECRET }}
         run: |
-          # Build metadata via Node so secrets (quotes + \n) embed safely as secret_text bindings.
-          # GA4_SA delivered as a Worker secret_text (GitHub secret GA4_SA_JSON) because a Google SA key
-          # (~2.3KB) exceeds the Cloudflare Secrets Store 1024-char cap. Encrypted at rest; never committed.
-          # TYPEFORM_WEBHOOK_SECRET is optional — when set it turns on webhook HMAC verification.
+          # Merge declared bindings while preserving existing credentials. Do not
+          # re-serialize service-account values into deployment metadata or logs.
           node -e '
             const fs = require("fs");
             const bindings = [
@@ -57,18 +55,6 @@ jobs:
               { type: "secrets_store_secret", name: "GADS_ADMIN_KEY", secret_name: "gads_admin_key", store_id: "170e0688af5f479292e0ab52c980eff7" },
               { type: "secrets_store_secret", name: "CRO_INTERNAL_KEY", secret_name: "cro_internal_key", store_id: "170e0688af5f479292e0ab52c980eff7" },
             ];
-            if (process.env.GA4_SA_JSON && process.env.GA4_SA_JSON.trim()) {
-              bindings.push({ type: "secret_text", name: "GA4_SA", text: process.env.GA4_SA_JSON });
-              console.log("GA4_SA binding: attached");
-            } else {
-              console.log("GA4_SA binding: SKIPPED (GA4_SA_JSON secret empty)");
-            }
-            if (process.env.TYPEFORM_WEBHOOK_SECRET && process.env.TYPEFORM_WEBHOOK_SECRET.trim()) {
-              bindings.push({ type: "secret_text", name: "TYPEFORM_WEBHOOK_SECRET", text: process.env.TYPEFORM_WEBHOOK_SECRET });
-              console.log("TYPEFORM_WEBHOOK_SECRET binding: attached (webhook verification ON)");
-            } else {
-              console.log("TYPEFORM_WEBHOOK_SECRET binding: SKIPPED (webhook accepts unverified)");
-            }
             const metadata = {
               main_module: "worker.js",
               compatibility_date: "2025-04-01",
@@ -146,6 +132,7 @@ jobs:
             if curl -fsS https://cro-engine.launchpad.workers.dev/health > /tmp/health.json &&
               grep -q "\"build_sha\":\"${GITHUB_SHA}\"" /tmp/health.json; then
               echo "PASS: deployed SHA ${GITHUB_SHA} is live"
+              node scripts/security-smoke.mjs
               exit 0
             fi
             echo "Waiting for deployed SHA ${GITHUB_SHA} (attempt ${ATTEMPT}/12)"
