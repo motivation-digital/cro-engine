@@ -10,4 +10,12 @@ for (const route of ['/purchase', '/server-event']) {
   const response = await fetch(base + route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(response.status, 401);
 }
-console.log('PASS: retired webhook rejects requests; native conversion authentication is preserved.');
+for (const [route, method] of [
+  ['/funnel/audit-invalid-tenant', 'GET'], ['/measurement/audit-invalid-tenant', 'GET'],
+  ['/operator/audit-invalid-tenant/recommend', 'GET'], ['/cro/audit-invalid-tenant/report', 'GET'],
+  ['/cro/audit-invalid-tenant/run', 'POST'],
+]) {
+  const response = await fetch(base + route, { method });
+  assert.equal(response.status, 401, route);
+}
+console.log('PASS: retired webhook rejects requests; conversions and reporting require authentication.');

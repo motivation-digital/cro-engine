@@ -324,7 +324,7 @@ async function handleHealth(env) {
     ga4_data_api: !!env.GA4_SA, // Measure organ credential (GA4_SA_JSON) — optional until provisioned
     typeform_retired: true,
     gads_operator: !!env.GADS && !!env.GADS_ADMIN_KEY, // CRO Operator -> gads-service (recommend)
-    internal_key: !!env.CRO_INTERNAL_KEY, // gates /server-event + /purchase (AGI-9000590)
+    internal_key: !!env.CRO_INTERNAL_KEY, // gates conversions and internal reporting/analysis
   };
   // The optional GA4 Data API is not required for collection health.
   const ok = checks.ga4_measurement_id && checks.ga4_secret_store && checks.db_sites;
@@ -335,10 +335,10 @@ async function handleHealth(env) {
   });
 }
 
-// ─── CRO engine endpoints (read-only) ───────────────────
+// ─── CRO engine responses ───────────────────
 
 function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+  return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 }
 
 // ─── Main router ─────────────────────────
@@ -374,13 +374,17 @@ export default {
       const measurement = path.match(/^\/measurement\/([^/]+)$/);
       if (measurement) {
         const tenant = decodeURIComponent(measurement[1]);
-        if (req.method === 'GET') return json(await measurementStatus(env, tenant));
+        if (req.method === 'GET') {
+          if (!(await internalAllowed(req, env))) return unauthorized();
+          return json(await measurementStatus(env, tenant));
+        }
         if (req.method === 'POST') return setupMeasurement(req, env, tenant);
         return new Response('Method not allowed', { status: 405 });
       }
 
       // Funnel KPIs (read-only): /funnel/:tenant (GET) — one front-to-back view from every source.
       if (path.startsWith('/funnel/') && req.method === 'GET') {
+        if (!(await internalAllowed(req, env))) return unauthorized();
         return json(await funnel(
           env,
           decodeURIComponent(path.slice('/funnel/'.length)),
@@ -390,13 +394,15 @@ export default {
 
       // CRO Operator (read-only recommend): /operator/:tenant/recommend?cid= (GET)
       if (path.startsWith('/operator/') && path.endsWith('/recommend') && req.method === 'GET') {
+        if (!(await internalAllowed(req, env))) return unauthorized();
         const tenant = decodeURIComponent(path.slice('/operator/'.length, -('/recommend'.length)));
         return json(await recommend(env, tenant, url.searchParams.get('cid')));
       }
 
-      // CRO engine (read-only): /cro/:tenant/report (GET) | /cro/:tenant/run (POST)
+      // Internal report reads and analysis runs (the latter write CRO records).
       const cro = path.match(/^\/cro\/([^/]+)\/(report|run)$/);
       if (cro) {
+        if (!(await internalAllowed(req, env))) return unauthorized();
         const tenant = decodeURIComponent(cro[1]);
         if (cro[2] === 'report' && req.method === 'GET') {
           return json(await readReport(env, tenant));
